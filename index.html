@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#171411">
+  <title>以撒 · 共享配置</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;color:#e9dfcf;background:#171411}
+    *{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:32px 24px;background:radial-gradient(ellipse at 50% 15%,#362b20 0,transparent 65%),#171411}
+    main{width:min(100%,580px)}.eyebrow{font-size:12px;letter-spacing:.18em;color:#b3a38c}h1{font-size:clamp(40px,8vw,64px);letter-spacing:-.06em;margin:24px 0 16px;line-height:1.12;font-weight:650}h1 span{color:#c4a174}p{line-height:1.85;color:#bcb09e;margin:0}.stats{display:flex;gap:36px;padding:32px 0;margin:28px 0;border-block:1px solid #514332}.stats strong{font-size:30px;font-variant-numeric:tabular-nums;font-weight:550;display:block;color:#ead9b9}.stats span{font-size:12px;color:#b3a38c;display:block;margin-top:4px}button{width:100%;border:1px solid #dbbb86;background:#dbbb86;color:#241c14;font:600 16px system-ui;padding:17px 24px;cursor:pointer;border-radius:4px}button:hover{background:#e8cda4}button:disabled{cursor:wait;opacity:.65}button:focus-visible,a:focus-visible{outline:3px solid #f3dfbd;outline-offset:5px}.status{margin-top:18px;font-size:13px;min-height:48px;white-space:pre-line}.meter{height:3px;background:#463a2b;margin-top:20px;overflow:hidden}.meter span{display:block;width:0;height:100%;background:#dbbb86;transition:width .2s}details{margin-top:24px;border-top:1px solid #514332;padding-top:20px;color:#c2b49e;font-size:13px}summary{cursor:pointer}ul{columns:2;list-style:none;padding:0;column-gap:24px}li{break-inside:avoid;margin:0 0 10px;line-height:1.45}.off{opacity:.55}footer{margin-top:40px;font-size:11px;line-height:1.8;color:#8f8170}a{color:#c8b08a;text-underline-offset:4px}small{display:block;margin-top:12px;font-size:12px;color:#978a78}@media(max-width:440px){.stats{gap:24px}ul{columns:1}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">HLLQKB / THE BROWSING OF ISAAC</div>
+  <h1>熟悉的地牢，<br><span>配好的以撒。</span></h1>
+  <p>从我的 Chrome 存档开始，带上中文道具说明和常用 mod。<br>进入之后，是你自己的冒险。</p>
+  <div class="stats"><div><strong>3</strong><span>存档位</span></div><div><strong>35</strong><span>启用的 mod</span></div><div><strong>中文</strong><span>EID 道具说明</span></div></div>
+  <button id="start" disabled>正在读取配置</button>
+  <div class="meter" role="progressbar" aria-label="初始配置导入进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="bar"></span></div>
+  <p id="status" class="status" role="status" aria-live="polite">正在检查浏览器中的存档。</p>
+  <small>首次导入约 25 MB 配置，游戏资源会另外加载。进度保存在当前浏览器。</small>
+  <details><summary>查看 mod 配置</summary><ul id="mods"></ul><p>已安装但关闭的 mod 也保留在配置里，可在游戏 MODS 菜单调整。</p></details>
+  <footer>初始配置快照：2026-11-04。不会自动覆盖已有进度。<br>
+    网页移植：<a href="https://github.com/chiikabu/the-browsing-of-isaac" target="_blank" rel="noopener">chiikabu</a> · 配置：<a href="https://github.com/hllqkb/isaac-web-setup" target="_blank" rel="noopener">hllqkb</a> · <a href="LICENSE">GPL-3.0</a><br>
+    The Binding of Isaac belongs to Nicalis, Inc. and Edmund McMillen.
+  </footer>
+</main>
+<script type="module" src="bootstrap.js"></script>
+</body>
+</html>
