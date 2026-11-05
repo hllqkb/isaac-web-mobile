@@ -306,3 +306,38 @@ jobs:
         with:
           name: Web-verification
           path: output/
+  hosted:
+    if: startsWith(github.ref_name, 'site/mobile-custom-host-')
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Package and verify the complete same-origin site in cloud CI
+        run: |
+          python3 scripts/prepare_hosted.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,re
+          original=Path('game.html').read_text()
+          hosted=Path('dist/game.html').read_text()
+          pattern=r'window\.__isaacPortableData = (.*?);</script>'
+          old=json.loads(re.search(pattern,original,re.S)[1])
+          new=json.loads(re.search(pattern,hosted,re.S)[1])
+          for before,after in zip(old['streams'],new['streams'],strict=True):
+              assert after['base']==f"./chunks/{before['tag']}"
+              if 'base' in before: after['base']=before['base']
+              else: after.pop('base')
+          new['base']=old['base']
+          assert new==old,'Game resource identities or metadata changed'
+          module_pattern=r'window\.__isaacModules = (.*?);</script>'
+          assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
+          assert 'window.isaacModCatalogue = null;' in hosted
+          assert './web/diagnostics.mjs' in hosted
+          assert len(list(Path('dist/chunks').rglob('*.bin')))==38
+          for i in range(7): assert Path(f'dist/preset-{i}.bin').read_bytes()==Path(f'preset-{i}.bin').read_bytes()
+          print('SAME-ORIGIN RESOURCE BUNDLE VERIFIED; ENGINE, CLOCK, MOD PRESET AND DIAGNOSTICS PRESERVED')
+          PY
