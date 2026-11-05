@@ -130,7 +130,8 @@ export function createMobileButtons({root, input, state, resetControls = () => i
   const description = document.createElement('p');
   description.textContent = '渲染帧率、游戏更新速度和最近帧时间。';
   const details = document.createElement('p');
-  const choices = document.createElement('div'); panel.append(description, details, choices);
+  const crashDetails = document.createElement('p'); crashDetails.hidden = true; crashDetails.style.whiteSpace = 'pre-wrap';
+  const choices = document.createElement('div'); panel.append(description, details, crashDetails, choices);
   button(choices, '关闭', 'close-performance', (_owner, down) => {if (down) panel.hidden = true;});
   function renderPanel() {
     const gl = document.getElementById('canvas')?.getContext('webgl2');
@@ -139,6 +140,9 @@ export function createMobileButtons({root, input, state, resetControls = () => i
     const perf = window.isaacPerfSummary?.();
     const timing = perf?.samples ? `；帧时间 P95 ${perf.p95Ms.toFixed(1)} ms，最大 ${perf.maxMs.toFixed(0)} ms，超过 100 ms ${perf.over100} 次` : '';
     details.textContent = `${fps.textContent}；游戏更新 ${fps.dataset.updates || '--'} 次/秒${timing}；渲染器：${renderer}；${navigator.userAgent}`;
+    const crash = window.isaacLastCrash?.();
+    crashDetails.hidden = !crash;
+    crashDetails.textContent = crash ? `上次错误：${String(crash.title || '').slice(0,400)}\n${String(crash.error || '').slice(0,400)}` : '';
   }
   let lastTime = performance.now(), lastFrame = 0, lastUpdate = 0, lastCounter = null, lastToolsContext = '';
   return {update(mode) {
