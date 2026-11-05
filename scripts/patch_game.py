@@ -18,6 +18,7 @@ def main() -> None:
     manifest = json.loads(match.group(1))
     updated = apply_mobile_page(page, ROOT / 'mobile', manifest)
     updated = apply_web_transport(updated, ROOT / 'web/resource_transport.mjs')
+    updated = updated.replace('</body>', '<script type="module" src="./web/diagnostics.mjs"></script>\n</body>')
     current = re.search(r'window\.__isaacPortableData = (.*?);</script>', updated, re.S)
     if not current or current.group(1) != match.group(1):
         raise ValueError('Resource manifest changed while patching the page')
