@@ -1,6 +1,8 @@
-"""Add bounded network waits to the pinned hosted game's whole-chunk path."""
+"""Add bounded network waits and reader diagnostics to the pinned hosted game."""
 
 from pathlib import Path
+import json
+import re
 
 
 def apply_web_transport(page: str, source: Path) -> str:
@@ -44,4 +46,43 @@ def apply_web_transport(page: str, source: Path) -> str:
         if page.count(old) != 1:
             raise ValueError(f'Portable transport insertion point changed: {old}')
         page = page.replace(old, new)
+    registry = re.search(r'window\.__isaacModules = (.*?);</script>', page, re.S)
+    if not registry:
+        raise ValueError('Missing inline modules for reader diagnostics')
+    modules = json.loads(registry.group(1))
+    boot = modules['boot_web.mjs']
+    worker = re.search(r'const READER_WORKER=`([^`]*?)`;', boot, re.S)
+    if not worker:
+        raise ValueError('Reader worker insertion point changed')
+    guard = (source.parent / 'reader_guard.mjs').read_text().replace('export function ', 'function ', 1)
+    if '`' in guard or '\\' in guard:
+        raise ValueError('Reader guard cannot contain template delimiters or escapes')
+    guarded = worker.group(1)
+    for old, new in {'await fetch(url, init)': 'await readerFetch(url, init)',
+                     'await fetch(url)': 'await readerFetch(url)',
+                     '}).catch(() => {\n    landed();': '}).catch((error) => {\n    landed();',
+                     'buf: null, hit: false, pf: prefetched, ah: ahead':
+                     "buf: null, error: String((error && error.message) || error).slice(0,240), hit: false, pf: prefetched, ah: ahead"}.items():
+        if guarded.count(old) != 1:
+            raise ValueError(f'Reader fetch insertion point changed: {old}')
+        guarded = guarded.replace(old, new)
+    guarded = guard + '\nconst readerFetch = createReaderFetch({fetch:fetch.bind(globalThis)});\n' + guarded
+    boot = boot[:worker.start(1)] + guarded + boot[worker.end(1):]
+    failure = "failRead(p.src,p.off,p.len,'the reader had no bytes')"
+    if boot.count(failure) != 1:
+        raise ValueError('Reader failure diagnostic insertion point changed')
+    boot = boot.replace(failure, "failRead(p.src,p.off,p.len,d.error||'the reader had no bytes')")
+    anchor = 'window.isaacLazyStats=()=>({'
+    if boot.count(anchor) != 1:
+        raise ValueError('Reader diagnostic insertion point changed')
+    pending = (
+        "window.isaacPendingReadStats=()=>{const windows=[];for(const p of pendingReads.values()){"
+        "windows.push({file:String(p.src).slice(-180),offset:p.off,bytes:p.len,"
+        "ageMs:Math.round(performance.now()-p.t0)});if(windows.length===8)break;}"
+        "return {pendingReads:pendingReads.size,"
+        "oldestPendingMs:pendingReads.size?Math.round(performance.now()-pendingReads.values().next().value.t0):0,"
+        "windows};};"
+    )
+    modules['boot_web.mjs'] = boot.replace(anchor, pending + anchor + '...window.isaacPendingReadStats(),')
+    page = page[:registry.start(1)] + json.dumps(modules) + page[registry.end(1):]
     return page
