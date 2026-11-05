@@ -488,6 +488,41 @@ jobs:
             },worker);
             assert.equal(requests,4); // cold range, full preload, short preload and hash mismatch
             console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
+            for(const scenario of ['success','retry','continue']) {
+              const gatePage=await browser.newPage();
+              await gatePage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
+                export function createVerifiedChunkCache(){let completed=0;return {
+                  summary:()=>({received:completed?8:0,total:8,completed}),
+                  preload:()=>{window.__preloadCalls=(window.__preloadCalls||0)+1;
+                    if(window.__scenario==='success')return new Promise(resolve=>{window.__release=()=>{completed=38;resolve();};});
+                    if(window.__scenario==='retry'&&window.__preloadCalls>1){completed=38;return Promise.resolve();}
+                    return Promise.reject(Error('quota fixture'));
+                  }
+                };}
+              `}));
+              await gatePage.goto('http://127.0.0.1:8766/web/preload.mjs');
+              await gatePage.setContent('<div id="overlay">original game loading</div>');
+              await gatePage.evaluate(async scenario=>{
+                window.__scenario=scenario;window.__finished=false;
+                const {prepareResources}=await import('/web/preload.mjs?fixture='+scenario);
+                window.__gate=prepareResources().then(()=>{window.__finished=true;});
+              },scenario);
+              assert.equal(await gatePage.evaluate(()=>window.__finished),false);
+              assert.ok(await gatePage.locator('section[aria-label="准备游戏资源"]').isVisible());
+              if(scenario==='success')await gatePage.evaluate(()=>window.__release());
+              else {
+                await gatePage.locator('[data-error]').waitFor({state:'visible'});
+                assert.ok((await gatePage.locator('[data-error]').innerText()).includes('临时加载仍可能卡顿'));
+                await gatePage.locator(scenario==='retry'?'[data-retry]':'[data-continue]').click();
+              }
+              await gatePage.waitForFunction(()=>window.__finished);
+              assert.equal(await gatePage.locator('section[aria-label="准备游戏资源"]').count(),0);
+              assert.equal(await gatePage.locator('#overlay').isVisible(),true);
+              assert.equal(await gatePage.evaluate(()=>window.isaacPreloadCompatibility===true),scenario==='continue');
+              if(scenario==='retry')assert.equal(await gatePage.evaluate(()=>window.__preloadCalls),2);
+              console.log('PRELOAD GATE LIFETIME VERIFIED',scenario);
+              await gatePage.close();
+            }
           }finally{await browser.close();}
           JS
       - name: Verify committed page matches the generated page
@@ -503,7 +538,7 @@ jobs:
           name: Web-verification
           path: output/
   hosted:
-    if: startsWith(github.ref_name, 'site/mobile-custom-host-')
+    if: startsWith(github.ref_name, 'site/mobile-custom-host-') || github.ref_name == 'site/mobile-chunk-cache-prototype-20261105'
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -528,11 +563,24 @@ jobs:
               if 'base' in before: after['base']=before['base']
               else: after.pop('base',None)
           new['base']=old['base']
+          assert new.pop('hostedFullCache') is True
           assert new==old,'Game resource identities or metadata changed'
           module_pattern=r'window\.__isaacModules = (.*?);</script>'
           assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
           assert 'window.isaacModCatalogue = null;' in hosted
           assert './web/diagnostics.mjs' in hosted
+          gate=hosted.index("window.isaacFullCacheReady=import('./web/preload.mjs')")
+          assert hosted.index('window.__isaacPortableData =') < gate < hosted.index('var P = window.__isaacPortableData')
+          assert 'if (P.hostedFullCache) await window.isaacFullCacheReady;' in hosted
+          assert hosted.index('window.isaacFullCacheReady.then(function () {') < hosted.index('document.body.appendChild(s);')
+          for name in ['preload.mjs','chunk_cache.mjs','reader_guard.mjs']:
+              assert Path('dist/web',name).is_file()
+          chunks=json.loads(re.search(r'export const CHUNKS = (\[.*?\]);',Path('web/chunk_cache.mjs').read_text()).group(1))
+          inventory={e['path']:e for e in json.loads(Path('dist/inventory.json').read_text())}
+          assert len(chunks)==len(inventory)==38
+          for e in chunks:
+              path=e['path'].split('?')[0].removeprefix('./')
+              assert (e['bytes'],e['sha256'])==(inventory[path]['bytes'],inventory[path]['sha256'])
           assert len(list(Path('dist/chunks').rglob('*.bin')))==38
           for i in range(7): assert Path(f'dist/preset-{i}.bin').read_bytes()==Path(f'preset-{i}.bin').read_bytes()
           print('SAME-ORIGIN RESOURCE BUNDLE VERIFIED; ENGINE, CLOCK, MOD PRESET AND DIAGNOSTICS PRESERVED')

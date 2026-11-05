@@ -85,7 +85,7 @@ def apply_web_transport(page: str, source: Path) -> str:
 const networkReaderFetch = createReaderFetch({fetch:fetch.bind(globalThis)});
 let rawChunkCache = null;
 const readerFetch = async(url, init) => {
-  const hit = rawChunkCache && await rawChunkCache.readRange(url, init);
+  const hit = rawChunkCache && await (new Headers(init && init.headers).has('range') ? rawChunkCache.readRange(url, init) : rawChunkCache.readWhole(url));
   return hit || networkReaderFetch(url, init);
 };
 ''' + guarded

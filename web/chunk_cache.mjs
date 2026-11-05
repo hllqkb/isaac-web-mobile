@@ -6,7 +6,7 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
   cacheMs=1500,cacheName='isaac-raw-chunks-v1-d097d9ae'}={}) {
   const canonical=url=>{const u=new URL(url,baseUrl);u.hash='';u.searchParams.delete('w');return u.href;};
   const known=new Map(entries.map(entry=>[canonical(entry.path||entry.url),entry]));
-  const blobs=new Map();let blobBytes=0;
+  const blobs=new Map(),loading=new Map();let blobBytes=0;
   const network=createReaderFetch({fetch:request});
   const memo=(key,blob)=>{if(blobs.has(key)){blobBytes-=blobs.get(key).size;blobs.delete(key);}blobs.set(key,blob);blobBytes+=blob.size;while(blobs.size>2||blobBytes>40*1048576){const first=blobs.keys().next().value;blobBytes-=blobs.get(first).size;blobs.delete(first);}};
   const state={active:false,received:0,total:[...known.values()].reduce((n,e)=>n+e.bytes,0),completed:0,hits:0,misses:0,error:null};
@@ -14,14 +14,16 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
   const valid=(response,entry)=>response?.status===200&&response.headers.get('x-isaac-sha256')===entry.sha256&&response.headers.get('content-length')===String(entry.bytes);
   async function cachedBlob(key,entry) {
     if(blobs.has(key)){const blob=blobs.get(key);blobs.delete(key);blobs.set(key,blob);return blob;}
-    const blob=await bounded(async()=>{
+    if(loading.has(key))return loading.get(key);
+    const load=bounded(async()=>{
       const cache=await cacheStorage.open(cacheName),response=await cache.match(key);
       if(!valid(response,entry))return null;
       const stored=await response.blob();
       return stored.size===entry.bytes?stored:null;
     },cacheMs);
-    if(blob)memo(key,blob);
-    return blob;
+    const shared=load.then(blob=>{if(blob)memo(key,blob);return blob;}).finally(()=>loading.delete(key));
+    loading.set(key,shared);
+    return shared;
   }
   async function readRange(url,init={}) {
     const key=canonical(url),entry=known.get(key);
