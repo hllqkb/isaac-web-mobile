@@ -56,8 +56,9 @@ jobs:
               print('VERIFIED RELEASE FILE',name,Path(name).stat().st_size,expected,flush=True)
           Path('SHA256SUMS').write_text('\n'.join(sums)+'\n')
           PY
+          test "$(gh release view v2026.11.05-r2 --json isDraft --jq .isDraft)" = true
           gh release upload v2026.11.05-r2 --clobber Isaac-Mobile-2026-11-05-r2.apk Isaac-Mobile-source-2026-11-05-r2.zip SHA256SUMS
-          gh api "repos/$GH_REPO/releases/tags/v2026.11.05-r2" --jq '{id,tag_name,draft,assets:[.assets[]|{id,name,size,state,digest}]}'
+          gh api "repos/$GH_REPO/releases" --jq '.[]|select(.tag_name=="v2026.11.05-r2")|{id,tag_name,draft,assets:[.assets[]|{id,name,size,state,digest}]}'
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
