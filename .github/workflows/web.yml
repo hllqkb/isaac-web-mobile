@@ -700,8 +700,9 @@ jobs:
                   let rejected=false;try{parallel.setConcurrency(invalid);}catch(error){rejected=error instanceof RangeError;}
                   if(!rejected||parallel.summary().concurrency!==8)throw Error('Invalid concurrency changed an existing cache');
                 }
+                const transferredBeforeWarm=parallel.summary().downloadedBytes;
                 await parallel.preload();
-                if(parallel.summary().downloadedBytes!==0)throw Error('Changing concurrency invalidated the whole-file cache');
+                if(parallel.summary().downloadedBytes!==transferredBeforeWarm)throw Error('Changing concurrency redownloaded whole-file bytes: '+JSON.stringify({before:transferredBeforeWarm,after:parallel.summary().downloadedBytes}));
                 console.log('GLOBAL CONCURRENCY LIMIT VERIFIED',JSON.stringify({configured:configured??'default',expected,peak}));
               }
               const cancelStore=memoryStore();let groupFetches=0,groupAborted=false;
