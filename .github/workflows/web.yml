@@ -388,6 +388,48 @@ jobs:
             });
             if(JSON.stringify(retained)!=='[5,11,26]'||presetRequests)throw Error('Existing player data was re-imported');
             console.log('EXISTING PLAYER DATA PRESERVED',retained);
+            await page.addInitScript(()=>{window.isaacHosted=true;});
+            await page.route('**/game.html?prepared=1',route=>route.fulfill({contentType:'text/html',body:'<p>Prepared game navigation reached</p>'}));
+            await page.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
+              export const CHUNKS=[{}];
+              export function createVerifiedChunkCache(){let received=0,rejectPending;return {
+                summary:()=>({received,total:10000000,completed:received===10000000?1:0,bytesPerSecond:2097152,etaSeconds:3,retrying:false}),
+                preload:()=>{window.__homeCalls=(window.__homeCalls||0)+1;
+                  if(window.__homeCalls===1)return Promise.reject(Error('connection interrupted fixture'));
+                  received=4000000;return new Promise((resolve,reject)=>{rejectPending=reject;window.__finishHome=()=>{received=10000000;resolve();};});},
+                pause:async()=>{rejectPending(new DOMException('Paused','AbortError'));}
+              };}
+            `}));
+            await page.goto('http://127.0.0.1:8765/');
+            await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            await page.locator('#start').click();
+            await page.waitForFunction(()=>document.querySelector('#start').textContent==='重试');
+            if(!page.url().endsWith('/'))throw Error('Failed preparation navigated to game');
+            await page.locator('#start').click();
+            await page.waitForFunction(()=>typeof window.__finishHome==='function');
+            if(!await page.locator('#start').isDisabled())throw Error('Preparation allows duplicate starts');
+            await page.locator('#prepare-pause').click();
+            await page.waitForFunction(()=>document.querySelector('#start').textContent==='继续下载');
+            if(!page.url().endsWith('/'))throw Error('Pause incorrectly navigated to game');
+            await page.locator('#start').click();
+            await page.waitForFunction(()=>window.__homeCalls===3);
+
+            const prepared=await page.locator('.meter').getAttribute('aria-valuenow');
+            if(!(Number(prepared)>0&&Number(prepared)<100))throw Error('Combined progress is not partial');
+            for(const [name,viewport] of [['desktop',{width:1366,height:900}],['phone-portrait',{width:390,height:844}],['phone-landscape',{width:850,height:390}]]){
+              await page.setViewportSize(viewport);
+              await page.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode()));});
+              await page.screenshot({path:'output/home-prepare-'+name+'.png',fullPage:true,animations:'disabled'});
+            }
+            if(presetRequests)throw Error('Hosted preparation re-imported existing saves');
+            await page.evaluate(()=>window.__finishHome());await page.waitForURL('**/game.html?prepared=1');
+            const hostedRetained=await page.evaluate(async()=>{
+              const db=await new Promise(resolve=>{const request=indexedDB.open('isaac-saves');request.onsuccess=()=>resolve(request.result);});
+              try{return await new Promise(resolve=>{const request=db.transaction('files').objectStore('files').get('existing-player-progress');request.onsuccess=()=>resolve(Array.from(request.result.bytes));});}finally{db.close();}
+            });
+            if(JSON.stringify(hostedRetained)!=='[5,11,26]')throw Error('Hosted preparation modified existing saves');
+            console.log('HOSTED HOME: COMBINED PROGRESS, SAME-PAGE RETRY AND SAVE PROTECTION VERIFIED');
+
             const cache=await page.evaluate(async()=>{
               const {createSoundBootCache}=await import('/mobile/boot_cache.mjs');
               let calls=0;const expected=new Uint8Array(64).map((_,n)=>n);

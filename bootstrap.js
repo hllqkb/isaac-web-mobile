@@ -4,8 +4,11 @@ const start = document.getElementById('start');
 const status = document.getElementById('status');
 const bar = document.getElementById('bar');
 let info;
+let homePreparation;
+
 
 function progress(text, value) {
+  if(homePreparation){homePreparation.notice(text);return;}
   status.textContent = text;
   bar.style.width = `${value}%`;
   bar.parentElement.setAttribute('aria-valuenow', String(value));
@@ -83,11 +86,13 @@ async function importPreset() {
     localStorage.setItem(readyKey, 'existing');
     return;
   }
-  progress('正在下载你的初始存档和 mod。', 5);
+  if(homePreparation)await homePreparation.downloadPreset();
+  progress(homePreparation?'正在校验存档和 mod。':'正在下载你的初始存档和 mod。', 5);
   const chunks = [];
   let received = 0;
   for (const part of info.parts) {
-    const response = await fetch(part.url);
+    const response = homePreparation?await homePreparation.readPreset(part.url):await fetch(part.url);
+    if(!response)throw new Error('已下载的配置无法读取，请重试。');
     if (!response.ok) throw new Error(`配置下载失败：HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length !== part.bytes || await digest(bytes) !== part.sha256) throw new Error('配置文件校验失败，请重试。');
@@ -130,22 +135,40 @@ async function importPreset() {
   localStorage.setItem(readyKey, info.sha256);
   localStorage.removeItem(pendingKey);
   if (navigator.storage?.persist) await navigator.storage.persist().catch(() => false);
-  progress('配置已保存，正在进入游戏。', 100);
+  progress(homePreparation?'存档和 mod 已准备好。':'配置已保存，正在进入游戏。', 100);
 }
 
 start.addEventListener('click', async () => {
   start.disabled = true;
-  start.textContent = '开始游戏';
+  start.textContent = window.isaacHosted===true?'准备中…':'开始游戏';
+  start.setAttribute('aria-busy','true');
   try {
     if (!navigator.locks) throw new Error('请更新 Chrome 或 Edge 后重试。');
+    if(window.isaacHosted===true){
+      if(!homePreparation){
+        const {createHomePreparation}=await import('./web/home_prepare.mjs');
+        homePreparation=createHomePreparation({info,render:({value,label,detail,canPause,showPause})=>{
+          status.textContent=label;bar.style.width=`${value}%`;
+          bar.parentElement.setAttribute('aria-valuenow',String(Math.round(value)));
+          bar.parentElement.setAttribute('aria-valuetext',`${Math.round(value)}%，${label}`);
+          document.getElementById('prepare-detail').textContent=detail;
+          document.getElementById('prepare-percent').textContent=`${Math.floor(value)}%`;
+          const pause=document.getElementById('prepare-pause');pause.hidden=!showPause;pause.disabled=!canPause;
+        }});
+      }
+      homePreparation.start();
+    }
     await navigator.locks.request('isaac-shared-import', importPreset);
-    location.assign('game.html');
+    if(homePreparation){homePreparation.presetReady();await homePreparation.resources();homePreparation.close();}
+    location.assign(homePreparation?'game.html?prepared=1':'game.html');
   } catch (error) {
-    progress(error.message || String(error), 0);
+    if(homePreparation)homePreparation.stop(error);else progress(error.message || String(error), 0);
     start.disabled = false;
-    start.textContent = '重试';
-  }
+    start.textContent = error.name==='AbortError'?'继续下载':'重试';
+  } finally {start.setAttribute('aria-busy','false');}
 });
+
+document.getElementById('prepare-pause').addEventListener('click',()=>{homePreparation?.pause().catch(error=>{status.textContent=error.message||String(error);});});
 
 try {
   const response = await fetch('preset-info.json');
@@ -160,7 +183,7 @@ try {
     document.getElementById('mods').append(item);
   }
   const existing = localStorage.getItem(readyKey);
-  progress(existing ? '已找到存档，可以直接开始。' : '首次开始会下载存档和 mod。', existing ? 100 : 0);
+  progress(existing ? (window.isaacHosted===true?'已找到存档，开始后检查游戏资源。':'已找到存档，可以直接开始。') : '首次开始会下载存档和 mod。', existing&&window.isaacHosted!==true?100:0);
   start.textContent = '开始游戏';
   start.disabled = false;
 } catch (error) {
