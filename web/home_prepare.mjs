@@ -7,7 +7,7 @@ export function createHomePreparation({info,render}) {
   const preset=createVerifiedChunkCache({baseUrl,entries:info.parts.map(part=>({path:part.url,bytes:part.bytes,sha256:part.sha256})),cacheName:'isaac-preset-parts-v1-'+info.sha256});
   window.isaacFullChunkCache=resources;
   let active=false,closed=false,visible=true,held=null,request=null,timer=null;
-  let presetReady=false,phase='checking',message='',downloading=false,pausing=false;
+  let complete=false,presetReady=false,phase='checking',message='',downloading=false,pausing=false;
   const current=()=>phase==='preset'?preset:resources;
   function release() {
     const previous=held;held=null;
@@ -37,14 +37,14 @@ export function createHomePreparation({info,render}) {
       const eta=phase==='resources'?state.etaSeconds:Math.max(0,total-ready)/speed;
       if(Number.isFinite(eta)&&eta>=0){const seconds=Math.ceil(eta);estimate=`预计约 ${Math.floor(seconds/60)?Math.floor(seconds/60)+' 分 ':''}${seconds%60} 秒`;}
     }
-    render({value:total?Math.min(100,ready/total*100):0,
+    render({value:complete?100:(total?Math.min(99,ready/total*100):0),
       label:state.retrying&&downloading?'连接中断，正在自动重试。':message,
       detail:`${(ready/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MiB · ${downloading?rate+' · ':''}${estimate}`,
       canPause:active&&downloading&&!pausing,showPause:active&&downloading});
   }
   return {
     start() {
-      active=true;phase='checking';downloading=false;pausing=false;
+      active=true;complete=false;phase='checking';downloading=false;pausing=false;
       document.addEventListener('visibilitychange',visibility);
       window.addEventListener('pagehide',leaving);window.addEventListener('pageshow',returning);
       keepAwake();if(!timer)timer=setInterval(update,500);update();
@@ -52,7 +52,9 @@ export function createHomePreparation({info,render}) {
     async downloadPreset() {
       phase='preset';downloading=true;message='正在准备存档和 mod。';update();
       await preset.preload();
-      if(preset.summary().completed!==info.parts.length)throw Error('配置尚未全部准备好，请继续下载。');
+      const prepared=preset.summary();
+      if(prepared.paused)throw new DOMException('Paused','AbortError');
+      if(prepared.complete!==true||prepared.completed!==info.parts.length)throw Error('配置尚未全部准备好，请继续下载。');
       downloading=false;phase='install';update();
     },
     readPreset(url) {return preset.readWhole(new URL(url,baseUrl).href);},
@@ -61,9 +63,11 @@ export function createHomePreparation({info,render}) {
     async resources() {
       presetReady=true;phase='resources';downloading=true;message='正在准备游戏资源，完成后自动进入。';
       window.isaacPreloadError=null;update();await resources.preload();
-      if(resources.summary().completed!==CHUNKS.length)throw Error('游戏资源尚未全部准备好，请继续下载。');
+      const prepared=resources.summary();
+      if(prepared.paused)throw new DOMException('Paused','AbortError');
+      if(prepared.complete!==true||prepared.completed!==CHUNKS.length)throw Error('游戏资源尚未全部准备好，请继续下载。');
       window.isaacPreloadError=null;
-      downloading=false;message='准备完成，正在进入游戏。';update();
+      complete=true;downloading=false;message='准备完成，正在进入游戏。';update();
     },
     async pause() {
       if(!active||!downloading||pausing)return;

@@ -393,7 +393,7 @@ jobs:
             await page.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
               export const CHUNKS=[{}];
               export function createVerifiedChunkCache(){let received=0,rejectPending;return {
-                summary:()=>({received,total:10000000,completed:received===10000000?1:0,bytesPerSecond:2097152,etaSeconds:3,retrying:false}),
+                summary:()=>({received,total:10000000,completed:received===10000000?1:0,complete:received===10000000,paused:false,bytesPerSecond:2097152,etaSeconds:3,retrying:false}),
                 preload:()=>{window.__homeCalls=(window.__homeCalls||0)+1;
                   if(window.__homeCalls===1)return Promise.reject(Error('connection interrupted fixture'));
                   received=4000000;return new Promise((resolve,reject)=>{rejectPending=reject;window.__finishHome=()=>{received=10000000;resolve();};});},
