@@ -171,6 +171,7 @@ jobs:
             for (const [name, viewport] of [['desktop',{width:1366,height:900}],['phone-portrait',{width:390,height:844}],['phone-landscape',{width:850,height:390}]]) {
               await page.setViewportSize(viewport);
               await page.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode()));});
+              await page.waitForFunction(()=>[...document.querySelectorAll('.scene,.sheet')].every(element=>getComputedStyle(element).opacity==='1'));
               if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Landing CTA label changed');
               const bounds=await page.locator('#start').boundingBox();
               if(!bounds||bounds.x<0||bounds.y<0||bounds.x+bounds.width>viewport.width||bounds.y+bounds.height>viewport.height)
