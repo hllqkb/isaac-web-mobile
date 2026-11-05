@@ -249,7 +249,7 @@ jobs:
               await page.route('**/diagnostics-harness',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><body><canvas tabindex="0"></canvas><script>
                 window.isaacFrame=20;window.keyboardTrace=[];
                 window.isaacResourceStats=()=>({attempts:2,fallbacks:1,failures:0,timeouts:1,waiting:1,active:[{key:'1:31',received:1024,fallback:true}]});
-                window.isaacSaveStats=()=>({pending:2});
+                window.isaacSaveStats=()=>({pending:2,inFlight:1,lastError:'fixture: save transaction aborted'});
                 addEventListener('keydown',e=>keyboardTrace.push('down:'+e.key));addEventListener('keyup',e=>keyboardTrace.push('up:'+e.key));
                 </script><script type="module" src="/web/diagnostics.mjs"></script>`}));
               await page.goto('http://127.0.0.1:8765/diagnostics-harness');
@@ -263,6 +263,7 @@ jobs:
               const panel=page.locator('#isaac-diagnostic-panel');assert.ok(await panel.isVisible());
               assert.ok((await panel.innerText()).includes('游戏正在等待资源读取'));
               assert.ok((await panel.innerText()).includes('2 个待写'));
+              assert.ok((await panel.innerText()).includes('save transaction aborted'));
               assert.ok(await page.evaluate(()=>keyboardTrace.includes('up:w')),'Opening diagnostics swallowed a held movement key release');
               await page.keyboard.press('Enter');
               assert.ok(!await page.evaluate(()=>keyboardTrace.includes('down:Enter')),'Diagnostics confirmed an in-game action');

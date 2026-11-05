@@ -121,8 +121,9 @@ function sample() {
   lastSampleAt=now;
   if (next !== frame) { frame = next; advancedAt = now; }
   const elapsed = baseline && !document.hidden && !baseline.hidden ? now - baseline.ms : 0;
-  const rate = elapsed >= 500 && frame !== null && baseline.frame !== null && frame >= baseline.frame
-    ? Math.round((frame - baseline.frame) * 10000 / elapsed) / 10 : null;
+  let rate = null;
+  if (!document.hidden && baseline && !baseline.hidden && frame !== null && baseline.frame !== null && frame >= baseline.frame)
+    rate = elapsed >= 500 ? Math.round((frame-baseline.frame)*10000/elapsed)/10 : current?.framesPerSecond ?? null;
   if (!baseline || elapsed >= 500 || document.hidden !== baseline.hidden) baseline = {ms:now,frame,hidden:document.hidden};
   const crash=read('isaacLastCrash');
   current = {at:new Date().toISOString(),frame,framesPerSecond:rate,refreshHz,
