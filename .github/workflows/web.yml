@@ -20,7 +20,7 @@ jobs:
       - name: Apply shared patches without downloading game assets
         id: patch
         run: python3 scripts/patch_game.py
-      - name: Verify module syntax, source identity and refresh-independent timing
+      - name: Verify module syntax, source identity and pacer call boundaries
         run: |
           node --input-type=module <<'JS'
           import fs from 'node:fs';
@@ -38,14 +38,24 @@ jobs:
           }
           for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery'])
             if(modules['mobile_'+name+'.mjs']!==fs.readFileSync('mobile/'+name+'.mjs','utf8'))throw Error('Stale mobile module '+name);
-          for(const refresh of [60,90,120,144]) {
+          // Synthetic clock: this checks the JS pacer's call boundaries only.
+          // Native render skips change the number of present/yield calls per game tick.
+          // Do not infer NativeGameTick rate from the number of pace() calls.
+          for(const syntheticInputHz of [60,90,120,144]) {
             let time=0;
+            const completions=[];
             const pace=createFramePacer({now:()=>time,wait:async ms=>{time+=ms;},hidden:()=>false});
-            for(let n=0;n<300;n++){time+=1000/refresh;await pace();}
-            const updates=150/(time/1000);
-            if(updates<29.5||updates>30.2)throw Error('Refresh-dependent engine speed: '+JSON.stringify({refresh,updates}));
-            console.log('ENGINE TIMING',JSON.stringify({refresh,updates}));
+            for(let n=0;n<300;n++){time+=1000/syntheticInputHz;await pace();completions.push(time);}
+            const gaps=completions.slice(1).map((time,index)=>time-completions[index]);
+            const minimumGapMs=Math.min(...gaps);
+            const pacedCallsPerSecond=gaps.length/((completions.at(-1)-completions[0])/1000);
+            // ceil() timer rounding may recover less than 1 ms on the next call.
+            if(minimumGapMs<1000/60-1-1e-6||pacedCallsPerSecond<59||pacedCallsPerSecond>60.2)
+              throw Error('Pacer call boundary changed: '+JSON.stringify({syntheticInputHz,minimumGapMs,pacedCallsPerSecond}));
+            console.log('PACE CALL BOUNDARY',JSON.stringify({syntheticInputHz,minimumGapMs,pacedCallsPerSecond}));
           }
+          console.log('NATIVE GAME SPEED NOT VERIFIED: no Wasm is executed in this synthetic pacer check.');
+          console.log('Real speed verification requires wall-clock deltas of present count and NativeGameTick, with native render-gate wait/skip counters.');
           console.log('PINNED RESOURCE AND MODULE CHECKS PASSED');
           JS
       - name: Verify transport failures, slow streams and immutable fallback
