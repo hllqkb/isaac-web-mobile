@@ -44,7 +44,7 @@ const result = root.querySelector('[data-result]');
 const previousButton = root.querySelector('[data-previous]');
 previousButton.disabled = !previous;
 const fields = new Map();
-for (const label of ['画面帧数', '最近推进', '刷新节奏', '待取资源', '备用与失败', '待写存档', '最近错误', '上次快照']) {
+for (const label of ['画面帧数', '最近推进', '刷新节奏', '待取资源', '等待文件', '备用与失败', '待写存档', '最近错误', '上次快照']) {
   const term = document.createElement('dt'), value = document.createElement('dd');
   term.textContent = label; panel.querySelector('dl').append(term, value); fields.set(label, value);
 }
@@ -69,6 +69,7 @@ function status() {
   if (current.hidden) return '页面在后台，帧数不用于判断卡死';
   if (current.done !== null) return '引擎已结束或报错，请下载报告';
   if (current.frame === null) return '游戏正在初始化';
+  if (current.reader?.pendingReads) return '游戏正在等待读取文件或解码';
   if (current.resources?.waiting) return '游戏正在等待资源读取';
   if (current.sinceAdvanceMs >= 5000) return '画面帧超过 5 秒未推进，原因待确认';
   return '画面帧正在推进';
@@ -81,6 +82,7 @@ function render() {
   fields.get('最近推进').textContent = `${(current.sinceAdvanceMs / 1000).toFixed(1)} 秒前`;
   fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计）`;
   fields.get('待取资源').textContent = resource ? `${resource.waiting} 个等待，${resource.active.length} 个下载\n${resource.active.map(x => `${x.key}: ${(x.received/1048576).toFixed(1)} MB，${x.fallback ? '备用源' : '主源'}`).join('\n')}` : '尚未初始化';
+  fields.get('等待文件').textContent = current.reader ? `${current.reader.pendingReads} 个待完成 · 最久 ${(current.reader.oldestPendingMs/1000).toFixed(1)} 秒\n${current.reader.windows.map(x=>`${x.file} @ ${x.offset} + ${x.bytes}`).join('\n')}` : '尚未初始化';
   fields.get('备用与失败').textContent = resource ? `备用 ${resource.fallbacks} · 超时 ${resource.timeouts} · 最终失败 ${resource.failures}` : '--';
   fields.get('待写存档').textContent = save ? `${save.pending ?? '--'} 个待写 · ${save.inFlight ?? 0} 个写入中${save.lastError ? ` · ${limit(save.lastError,180)}` : ''}` : '尚未初始化';
   fields.get('最近错误').textContent = errors.at(-1)?.text || current.crash?.error || '暂未捕获';
@@ -133,9 +135,10 @@ function sample() {
   current = {at:new Date().toISOString(),frame,framesPerSecond:rate,refreshHz,
     sinceAdvanceMs:Math.round(now-advancedAt),sampleGapMs,maxVisibleSampleGapMs,hidden:document.hidden,focused:document.hasFocus(),
     done:window.isaacDone == null ? null : limit(window.isaacDone,1500),
-    resources:read('isaacResourceStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
+    resources:read('isaacResourceStats'),reader:read('isaacPendingReadStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
     crash:crash ? {at:crash.at,title:limit(crash.title,256),error:limit(crash.error,2000)} : null};
   samples.push({at:current.at,frame,hidden:current.hidden,sampleGapMs,waiting:current.resources?.waiting ?? null,
+    pendingReads:current.reader?.pendingReads ?? null,oldestPendingMs:current.reader?.oldestPendingMs ?? null,
     received:current.resources?.active.reduce((n,x)=>n+x.received,0) ?? null,pending:current.save?.pending ?? null});
   if (samples.length > 60) samples.shift();
   if (now-persistedAt>=5000) persist();
@@ -162,7 +165,7 @@ panel.querySelector('[data-download]').addEventListener('click',()=>download(rep
 previousButton.addEventListener('click',()=>{if(previous)download(previous,'-previous');});
 panel.querySelector('[data-copy]').addEventListener('click',async()=>{
   sample();
-  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n资源 ${JSON.stringify(current.resources)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
+  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n资源 ${JSON.stringify(current.resources)}\n文件读取 ${JSON.stringify(current.reader)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
   try {await navigator.clipboard.writeText(text);result.textContent='已复制简要诊断。';}
   catch {const field=panel.querySelector('textarea');field.hidden=false;field.value=text;field.focus();field.select();result.textContent='请长按或使用复制快捷键，复制下方摘要。';}
 });
