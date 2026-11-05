@@ -65,7 +65,11 @@ def main() -> None:
         raise ValueError('Missing hosted preload manifest')
     hosted_data = json.loads(hosted_manifest.group(1))
     hosted_data['hostedFullCache'] = True
-    preload_script = """<script>window.isaacFullCacheReady=new Promise(function(resolve){
+    preload_script = """<script>if(new URLSearchParams(location.search).get('preload')==='off'){
+  window.__isaacPortableData.hostedFullCache=false;
+  window.isaacFullChunkCache=null;
+  window.isaacFullCacheReady=Promise.resolve();
+}else{window.isaacFullCacheReady=new Promise(function(resolve){
   import('./web/preload.mjs').then(function(module){return module.prepareResources();}).then(resolve).catch(function(error){
     console.error('[isaac preload module]',error);
     var panel=document.createElement('section');
@@ -87,7 +91,7 @@ def main() -> None:
     for(var button of [retry,online])button.style.cssText='min-height:44px;padding:8px 16px;font:inherit;cursor:pointer';
     panel.append(message,retry,online);document.body.appendChild(panel);
   });
-});</script>"""
+});}</script>"""
     page = (page[:hosted_manifest.start(1)] + json.dumps(hosted_data)
             + page[hosted_manifest.end(1):hosted_manifest.end()] + preload_script
             + page[hosted_manifest.end():])
