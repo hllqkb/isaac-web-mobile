@@ -402,10 +402,11 @@ jobs:
             });
             if(JSON.stringify(retained)!=='[5,11,26]'||presetRequests)throw Error('Existing player data was re-imported');
             console.log('EXISTING PLAYER DATA PRESERVED',retained);
+            await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});
             await page.addInitScript(()=>{
               window.isaacHosted=true;window.__fsCalls=0;window.__fakeFullscreen=false;
-              Object.defineProperty(document,'fullscreenElement',{get:()=>window.__fakeFullscreen?document.documentElement:null});
-              document.documentElement.requestFullscreen=()=>{
+              for(const key of ['fullscreenElement','webkitFullscreenElement'])Object.defineProperty(document,key,{configurable:true,get:()=>window.__fakeFullscreen?document.documentElement:null});
+              Element.prototype.requestFullscreen=()=>{
                 window.__fsCalls++;window.__fsBeforeImport=!window.__homeCalls;
                 if(!window.__allowFullscreen)return Promise.reject(Error('Fullscreen denied fixture'));
                 window.__fakeFullscreen=true;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();
@@ -431,7 +432,10 @@ jobs:
             await page.locator('#start').click();
             await page.waitForFunction(()=>document.querySelector('#start').textContent==='重试');
             if(!page.url().endsWith('/'))throw Error('Failed preparation navigated to game');
-            if(!await page.evaluate(()=>window.__fsCalls===1&&window.__fsBeforeImport))throw Error('Fullscreen was not requested before asynchronous preparation');
+            const fullscreenFixture=await page.evaluate(()=>({__fsCalls:window.__fsCalls,__fsBeforeImport:window.__fsBeforeImport??null,
+              fullscreenElement:document.fullscreenElement?.tagName??null,webkitFullscreenElement:document.webkitFullscreenElement?.tagName??null,
+              homeCalls:window.__homeCalls??null,readyState:document.readyState}));
+            if(fullscreenFixture.__fsCalls!==1||fullscreenFixture.__fsBeforeImport!==true)throw Error('Fullscreen was not requested before asynchronous preparation: '+JSON.stringify(fullscreenFixture));
             await page.locator('#enter-fullscreen').waitFor({state:'visible'});
             await page.evaluate(()=>{window.__allowFullscreen=true;});
             await page.locator('#enter-fullscreen').click();
