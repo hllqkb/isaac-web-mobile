@@ -92,6 +92,40 @@ jobs:
           assert.equal(await waiting,4);assert.ok(hints.some(text=>text.includes('正在读取游戏资源')));assert.equal(hints.at(-1),'');
           console.log('DEMAND WAIT NOTICE APPEARS AND CLEARS');
           JS
+      - name: Reproduce hidden reader waits and verify pending read diagnostics
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import vm from 'node:vm';
+          const page=fs.readFileSync('game.html','utf8');
+          const modules=JSON.parse(page.match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
+          const boot=modules['boot_web.mjs'];
+          const worker=boot.match(/const READER_WORKER=(`[^`]*`);/s);
+          assert.ok(worker,'Pinned reader worker source not found');
+          const source=new Function('return '+worker[1])();
+          for(const phase of ['headers','body']) {
+            const messages=[];
+            const context=vm.createContext({Response,ReadableStream,Uint8Array,ArrayBuffer,DecompressionStream,
+              setTimeout,clearTimeout,onmessage:null,postMessage:message=>messages.push(message),
+              fetch:phase==='headers'?()=>new Promise(()=>{}):async()=>new Response(new ReadableStream({start(){}}),
+                {status:206,headers:{'content-range':'bytes 0-3/4'}})});
+            vm.runInContext(source,context);
+            context.onmessage({data:{want:1,key:'fixture',url:'https://example.invalid/chunk.bin#r=0-3!4',len:4}});
+            await new Promise(resolve=>setTimeout(resolve,60));
+            assert.equal(messages.filter(message=>message.want===1).length,0);
+            console.log('REPRODUCED READER WAIT WITHOUT RESPONSE OR DEADLINE',phase);
+          }
+          const start=boot.indexOf('window.isaacPendingReadStats='),end=boot.indexOf(';window.isaacLazyStats=',start);
+          assert.ok(start>=0&&end>start,'Reader diagnostic hook not found');
+          const pendingReads=new Map(Array.from({length:20},(_,i)=>[i,{src:'resources/packed/gfx.a',off:i*1024,len:1024,t0:1000+i}]));
+          const window={};
+          new Function('window','pendingReads','performance',boot.slice(start,end+1))(window,pendingReads,{now:()=>5000});
+          const report=window.isaacPendingReadStats();
+          assert.equal(report.pendingReads,20);assert.equal(report.oldestPendingMs,4000);assert.equal(report.windows.length,8);
+          pendingReads.clear();assert.equal(window.isaacPendingReadStats().oldestPendingMs,0);
+          console.log('PENDING READER COUNT, OLDEST AGE AND BOUNDED WINDOW METADATA VERIFIED');
+          JS
       - name: Prepare cloud browser
         run: |
           npm install --no-save playwright@1.56.1
@@ -265,6 +299,12 @@ jobs:
               assert.ok((await panel.innerText()).includes('游戏正在等待资源读取'));
               assert.ok((await panel.innerText()).includes('2 个待写'));
               assert.ok((await panel.innerText()).includes('save transaction aborted'));
+              await page.evaluate(()=>{
+                window.isaacPendingReadStats=()=>({pendingReads:1,oldestPendingMs:12500,windows:[{file:'resources/packed/gfx.a',offset:1048576,bytes:1024,ageMs:12500}]});
+                isaacDiagnosticReport();
+              });
+              assert.ok((await panel.innerText()).includes('游戏正在等待读取文件或解码'));
+              assert.ok((await panel.innerText()).includes('12.5 秒'));
               assert.ok(await page.evaluate(()=>keyboardTrace.includes('up:w')),'Opening diagnostics swallowed a held movement key release');
               await page.keyboard.press('Enter');
               assert.ok(!await page.evaluate(()=>keyboardTrace.includes('down:Enter')),'Diagnostics confirmed an in-game action');
@@ -282,7 +322,7 @@ jobs:
               await button.click();assert.ok(await page.locator('[data-previous]').isEnabled());
               await page.evaluate(()=>{window.isaacDone='fixture: engine ended';isaacDiagnosticReport();});
               assert.ok((await panel.innerText()).includes('引擎已结束或报错'));
-              await page.evaluate(()=>{window.isaacDone=null;window.isaacResourceStats=()=>({attempts:0,fallbacks:0,failures:0,timeouts:0,waiting:0,active:[]});});
+              await page.evaluate(()=>{window.isaacDone=null;window.isaacPendingReadStats=()=>({pendingReads:0,oldestPendingMs:0,windows:[]});window.isaacResourceStats=()=>({attempts:0,fallbacks:0,failures:0,timeouts:0,waiting:0,active:[]});});
               await page.waitForTimeout(5500);
               await page.evaluate(()=>isaacDiagnosticReport());
               assert.ok((await panel.innerText()).includes('超过 5 秒未推进'));
