@@ -1017,11 +1017,11 @@ jobs:
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
             const warmPage=await browser.newPage();
-            await warmPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function createVerifiedChunkCache(){return {summary:()=>({received:8,total:8,completed:38,complete:true}),preload:()=>Promise.resolve()};}'}));
+            await warmPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function createVerifiedChunkCache(){return {summary:()=>({received:8,total:8,completed:38,complete:true}),setConcurrency:value=>{window.__warmConcurrency=value;},preload:()=>Promise.resolve()};}'}));
             await warmPage.goto('http://127.0.0.1:8767/web/preload.mjs?prepared=1');
             await warmPage.setContent('<div id="overlay">original</div>');
             const warmUi=await warmPage.evaluate(async()=>{const {prepareResources}=await import('/web/preload.mjs');await prepareResources();return document.querySelectorAll('section[aria-label="准备游戏资源"]').length;});
-            assert.equal(warmUi,0);await warmPage.close();
+            assert.equal(warmUi,0);assert.equal(await warmPage.evaluate(()=>window.__warmConcurrency),16);await warmPage.close();
             console.log('PREPARED GAME WARM CHECK DOES NOT SHOW A SECOND DOWNLOAD PANEL');
             const hosted=fs.readFileSync('dist/game.html','utf8');
             const loader=hosted.match(/<script>(if\(new URLSearchParams[\s\S]*?)<\/script>/)[1];
