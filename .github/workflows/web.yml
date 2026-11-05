@@ -846,7 +846,36 @@ jobs:
         run: |
           npm install --no-save playwright@1.56.1
           npx playwright install --with-deps chromium
-          python3 -m http.server 8767 --bind 127.0.0.1 --directory dist > /tmp/isaac-full-cache-server.log 2>&1 &
+          python3 - <<'PY' > /tmp/isaac-full-cache-server.log 2>&1 &
+          from http.server import SimpleHTTPRequestHandler,ThreadingHTTPServer
+          from pathlib import Path
+          from typing import Any,BinaryIO
+          class RangeHandler(SimpleHTTPRequestHandler):
+              def __init__(self,*args:Any,**kwargs:Any)->None:
+                  super().__init__(*args,directory='dist',**kwargs)
+              def send_head(self)->BinaryIO|None:
+                  value=self.headers.get('Range','')
+                  path=Path(self.translate_path(self.path))
+                  if value.startswith('bytes=') and path.is_file():
+                      start,end=map(int,value[6:].split('-'))
+                      size=path.stat().st_size
+                      if 0<=start<=end<size:
+                          source=path.open('rb');source.seek(start)
+                          self.remaining=end-start+1
+                          self.send_response(206)
+                          self.send_header('Content-Type',self.guess_type(str(path)))
+                          self.send_header('Content-Length',str(self.remaining))
+                          self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+                          self.end_headers();return source
+                  return super().send_head()
+              def copyfile(self,source:BinaryIO,output:BinaryIO)->None:
+                  if not hasattr(self,'remaining'):return super().copyfile(source,output)
+                  while self.remaining:
+                      data=source.read(min(65536,self.remaining))
+                      if not data:break
+                      output.write(data);self.remaining-=len(data)
+          ThreadingHTTPServer(('127.0.0.1',8767),RangeHandler).serve_forever()
+          PY
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
@@ -859,9 +888,15 @@ jobs:
             bytes:[...fs.readFileSync('dist/chunks/b/'+tag+'.bin').subarray(123,1147)]}));
           try {
             await page.goto('http://127.0.0.1:8767/web/chunk_cache.mjs');
-            const report=await page.evaluate(async cuts=>{
+            const info=JSON.parse(fs.readFileSync('dist/preset-info.json','utf8'));
+            const report=await page.evaluate(async({cuts,info})=>{
               const {createVerifiedChunkCache,CHUNKS}=await import('/web/chunk_cache.mjs');
               const baseUrl=location.origin+'/';
+              const configOptions={baseUrl,entries:info.parts.map(part=>({path:part.url,bytes:part.bytes,sha256:part.sha256})),cacheName:'isaac-preset-parts-v1-'+info.sha256};
+              const config=createVerifiedChunkCache(configOptions);await config.preload();
+              if(!config.summary().complete||config.summary().completed!==7||config.summary().received!==info.bytes)throw Error('Configuration segment preparation failed');
+              const warmConfig=createVerifiedChunkCache({...configOptions,request:()=>{throw Error('Warm config must not fetch');}});await warmConfig.preload();
+              if(warmConfig.summary().downloadedBytes!==0)throw Error('Warm config transferred bytes');
               const cold=createVerifiedChunkCache({baseUrl});
               await cold.preload();
               const first=cold.summary();
@@ -878,12 +913,19 @@ jobs:
                 if(JSON.stringify(bytes)!==JSON.stringify(cut.bytes))throw Error('Warm full-bundle range differs from packaged bytes');
               }
               return {cold:first,warm:warm.summary()};
-            },cuts);
+            },{cuts,info});
             const inventory=JSON.parse(fs.readFileSync('dist/inventory.json','utf8'));
             assert.equal(requests,inventory.reduce((count,entry)=>count+Math.ceil(entry.bytes/1048576),0));
             assert.equal(report.warm.completed,38);
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
+            const warmPage=await browser.newPage();
+            await warmPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function createVerifiedChunkCache(){return {summary:()=>({received:8,total:8,completed:38,complete:true}),preload:()=>Promise.resolve()};}'}));
+            await warmPage.goto('http://127.0.0.1:8767/web/preload.mjs?prepared=1');
+            await warmPage.setContent('<div id="overlay">original</div>');
+            const warmUi=await warmPage.evaluate(async()=>{const {prepareResources}=await import('/web/preload.mjs');await prepareResources();return document.querySelectorAll('section[aria-label="准备游戏资源"]').length;});
+            assert.equal(warmUi,0);await warmPage.close();
+            console.log('PREPARED GAME WARM CHECK DOES NOT SHOW A SECOND DOWNLOAD PANEL');
             const hosted=fs.readFileSync('dist/game.html','utf8');
             const loader=hosted.match(/<script>(if\(new URLSearchParams[\s\S]*?)<\/script>/)[1];
             for(const failure of ['entry','dependency']){
