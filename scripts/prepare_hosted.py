@@ -99,6 +99,21 @@ def main() -> None:
     if page.count(launch) != 1:
         raise ValueError('Game launch anchor changed')
     page = page.replace(launch, """  window.isaacFullCacheReady.then(function () {
+    if(new URLSearchParams(location.search).get('prepared')==='1'){
+      var status=document.getElementById('status'),overlay=document.getElementById('overlay');
+      var percentage=document.getElementById('percentage');
+      if(percentage)percentage.style.display='none';
+      if(status&&overlay){
+        var observer=new MutationObserver(function(){
+          if(overlay.hidden){observer.disconnect();return;}
+          if(status.textContent==='Loading...')status.textContent='资源已准备，正在启动游戏…';
+        });
+        observer.observe(status,{childList:true,characterData:true,subtree:true});
+        observer.observe(overlay,{attributes:true,attributeFilter:['hidden']});
+        if(status.textContent==='Loading...')status.textContent='资源已准备，正在启动游戏…';
+        window.addEventListener('pagehide',function(){observer.disconnect();},{once:true});
+      }
+    }
     document.body.appendChild(s);
   }).catch(function (error) {
     document.getElementById('status').textContent = '资源准备模块加载失败，请刷新后重试。';
@@ -128,7 +143,14 @@ def main() -> None:
                 inventory.append(entry)
                 print(f'Verified hosted resource {name}: {size} bytes', flush=True)
 
-    for name in ['index.html', 'bootstrap.js', 'preset-info.json', 'LICENSE']:
+    landing = (ROOT / 'index.html').read_text()
+    bootstrap_tag = '<script type="module" src="bootstrap.js"></script>'
+    if landing.count(bootstrap_tag) != 1:
+        raise ValueError('Home preparation entry point changed')
+    landing = landing.replace(bootstrap_tag,
+                              '<script>window.isaacHosted=true;</script>' + bootstrap_tag)
+    (DEST / 'index.html').write_text(landing)
+    for name in ['bootstrap.js', 'preset-info.json', 'LICENSE']:
         shutil.copyfile(ROOT / name, DEST / name)
     for index in range(7):
         shutil.copyfile(ROOT / f'preset-{index}.bin', DEST / f'preset-{index}.bin')

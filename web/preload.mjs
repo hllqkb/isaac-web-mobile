@@ -4,7 +4,8 @@ export async function prepareResources() {
   const cache=createVerifiedChunkCache({baseUrl:new URL('./',location.href).href});
   window.isaacFullChunkCache=cache;
   const overlay=document.getElementById('overlay'),wasHidden=overlay?.hidden;
-  if(overlay)overlay.hidden=true;
+  const prepared=new URLSearchParams(location.search).get('prepared')==='1';
+  let closed=false;
   const screen=document.createElement('section');
   screen.setAttribute('aria-label','准备游戏资源');
   screen.style.cssText='position:fixed;inset:0;z-index:10000;display:grid;place-items:center;padding:24px;background:#1c1915;color:#e7d7bb;font:15px/1.7 system-ui;overflow:auto';
@@ -22,11 +23,19 @@ export async function prepareResources() {
     <p style="font-size:13px;color:#bba98b">下载时请保持页面打开，网络中断会自动重试。<br>这里只下载游戏文件，不会修改存档。</p>
   </div>`;
   for(const button of screen.querySelectorAll('button'))button.style.cssText='min-height:44px;padding:8px 16px;border:1px solid #a78d69;border-radius:5px;background:#d8c7a8;color:#382d23;font:inherit;cursor:pointer';
-  document.body.append(screen);
+  const showScreen=()=>{
+    if(closed)return;
+    if(overlay)overlay.hidden=true;
+    document.body.append(screen);
+  };
+  // The home page already prepared these files. A normal warm check should not
+  // flash a second download screen; a missing cache still gets the fallback UI.
+  const presentationTimer=prepared?setTimeout(showScreen,350):null;
+  if(!prepared)showScreen();
   const meter=screen.querySelector('progress'),label=screen.querySelector('[data-progress]');
   const errorLabel=screen.querySelector('[data-error]'),actions=screen.querySelector('[data-actions]');
   const transfer=screen.querySelector('[data-transfer]');
-  let downloading=false,closed=false,pageActive=true,wakeLock=null,wakeRequest=null;
+  let downloading=false,pageActive=true,wakeLock=null,wakeRequest=null;
   function releaseWakeLock() {
     const held=wakeLock;wakeLock=null;
     if(held)Promise.resolve(held.release()).catch(()=>{});
@@ -93,7 +102,7 @@ export async function prepareResources() {
     document.removeEventListener('visibilitychange',visibilityChanged);
     window.removeEventListener('pagehide',pageLeaving);
     window.removeEventListener('pageshow',pageReturning);
-    clearInterval(timer);screen.remove();
+    clearTimeout(presentationTimer);clearInterval(timer);screen.remove();
     if(overlay)overlay.hidden=wasHidden;
   }
 }
