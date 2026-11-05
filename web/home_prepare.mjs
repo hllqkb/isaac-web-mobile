@@ -1,10 +1,12 @@
 import {createVerifiedChunkCache,CHUNKS} from './chunk_cache.mjs';
+import {getDownloadConcurrency} from './download_settings.mjs';
 
 // This component prepares bytes; the importer alone owns saves and DB transactions.
 export function createHomePreparation({info,render}) {
   const baseUrl=new URL('../',import.meta.url).href;
-  const resources=createVerifiedChunkCache({baseUrl});
-  const preset=createVerifiedChunkCache({baseUrl,entries:info.parts.map(part=>({path:part.url,bytes:part.bytes,sha256:part.sha256})),cacheName:'isaac-preset-parts-v1-'+info.sha256});
+  const concurrency=getDownloadConcurrency();
+  const resources=createVerifiedChunkCache({baseUrl,concurrency});
+  const preset=createVerifiedChunkCache({baseUrl,concurrency,entries:info.parts.map(part=>({path:part.url,bytes:part.bytes,sha256:part.sha256})),cacheName:'isaac-preset-parts-v1-'+info.sha256});
   window.isaacFullChunkCache=resources;
   let active=false,closed=false,visible=true,held=null,request=null,timer=null;
   let complete=false,presetReady=false,phase='checking',message='',downloading=false,pausing=false;
@@ -40,9 +42,13 @@ export function createHomePreparation({info,render}) {
     render({value:complete?100:(total?Math.min(99,ready/total*100):0),
       label:state.retrying&&downloading?'连接中断，正在自动重试。':message,
       detail:`${(ready/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MiB · ${downloading?rate+' · ':''}${estimate}`,
-      canPause:active&&downloading&&!pausing,showPause:active&&downloading});
+      canPause:active&&downloading&&!pausing,showPause:active&&downloading,settingsDisabled:active||pausing});
   }
   return {
+    setConcurrency(value) {
+      if(active||pausing)throw Error('请先暂停下载，再调整并发。');
+      resources.setConcurrency(value);preset.setConcurrency(value);
+    },
     start() {
       active=true;complete=false;phase='checking';downloading=false;pausing=false;
       document.addEventListener('visibilitychange',visibility);
@@ -72,7 +78,7 @@ export function createHomePreparation({info,render}) {
     async pause() {
       if(!active||!downloading||pausing)return;
       pausing=true;message='正在暂停下载。';update();
-      await current().pause();
+      try {await current().pause();}finally{pausing=false;update();}
     },
     stop(error) {
       active=false;downloading=false;

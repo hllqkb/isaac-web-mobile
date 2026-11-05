@@ -183,6 +183,7 @@ function showGame(prepared) {
 start.addEventListener('click', async () => {
   enterFullscreen();
   start.disabled = true;
+  document.getElementById('download-concurrency').disabled=window.isaacHosted===true;
   start.textContent = window.isaacHosted===true?'准备中…':'开始游戏';
   start.setAttribute('aria-busy','true');
   try {
@@ -190,12 +191,13 @@ start.addEventListener('click', async () => {
     if(window.isaacHosted===true){
       if(!homePreparation){
         const {createHomePreparation}=await import('./web/home_prepare.mjs');
-        homePreparation=createHomePreparation({info,render:({value,label,detail,canPause,showPause})=>{
+        homePreparation=createHomePreparation({info,render:({value,label,detail,canPause,showPause,settingsDisabled})=>{
           status.textContent=label;bar.style.width=`${value}%`;
           bar.parentElement.setAttribute('aria-valuenow',String(Math.round(value)));
           bar.parentElement.setAttribute('aria-valuetext',`${Math.round(value)}%，${label}`);
           document.getElementById('prepare-detail').textContent=detail;
           document.getElementById('prepare-percent').textContent=`${Math.floor(value)}%`;
+          document.getElementById('download-concurrency').disabled=!!settingsDisabled;
           const pause=document.getElementById('prepare-pause');pause.hidden=!showPause;pause.disabled=!canPause;
         }});
       }
@@ -208,12 +210,22 @@ start.addEventListener('click', async () => {
     if(homePreparation)homePreparation.stop(error);else progress(error.message || String(error), 0);
     start.disabled = false;
     start.textContent = error.name==='AbortError'?'继续下载':'重试';
-  } finally {start.setAttribute('aria-busy','false');}
+  } finally {start.setAttribute('aria-busy','false');if(!start.disabled&&!homePreparation)document.getElementById('download-concurrency').disabled=false;}
 });
 
 document.getElementById('prepare-pause').addEventListener('click',()=>{homePreparation?.pause().catch(error=>{status.textContent=error.message||String(error);});});
 
 try {
+  if(window.isaacHosted===true){
+    const settings=await import('./web/download_settings.mjs');
+    const select=document.getElementById('download-concurrency');
+    select.value=String(settings.getDownloadConcurrency());
+    document.getElementById('download-settings').hidden=false;
+    select.addEventListener('change',()=>{
+      try {homePreparation?.setConcurrency(Number(select.value));settings.setDownloadConcurrency(select.value);}
+      catch(error){status.textContent=error.message||String(error);select.value=String(settings.getDownloadConcurrency());}
+    });
+  }
   const response = await fetch('preset-info.json');
   if (!response.ok) throw new Error(`配置清单加载失败：HTTP ${response.status}`);
   info = await response.json();
