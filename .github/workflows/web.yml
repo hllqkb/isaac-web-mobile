@@ -665,10 +665,37 @@ jobs:
               try{await quotaCache.preload();}catch{}
               await quotaCache.preload();
               if(quotaFetches!==1||quotaCache.summary().completed!==1)throw Error('Cache write retry redownloaded verified bytes');
-              let live=0,peak=0;const parallelStore=memoryStore();
-              const parallel=createVerifiedChunkCache({entries:Array.from({length:4},(_,i)=>({...entry,path:url+'&parallel='+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
-                request:async()=>new Response(new ReadableStream({async start(c){live++;peak=Math.max(peak,live);await new Promise(resolve=>setTimeout(resolve,10));c.enqueue(bytes);live--;c.close();}}))});
-              await parallel.preload();if(peak!==4)throw Error('Expected four concurrent network jobs: '+peak);
+              for(const invalid of [0,-1,129,1.5,NaN,Infinity,'16',null]){
+                let rejected=false;
+                try{createVerifiedChunkCache({concurrency:invalid});}catch(error){rejected=error instanceof RangeError&&/concurrency/.test(error.message);}
+                if(!rejected)throw Error('Invalid constructor concurrency accepted: '+String(invalid));
+              }
+              for(const configured of [undefined,1,4,128]){
+                const expected=configured??16,parallelStore=memoryStore();
+                let live=0,peak=0,releaseBatch,timer;
+                const batch=new Promise(resolve=>{releaseBatch=resolve;timer=setTimeout(resolve,1000);});
+                const parallel=createVerifiedChunkCache({...(configured===undefined?{}:{concurrency:configured}),
+                  entries:Array.from({length:expected+3},(_,i)=>({...entry,path:url+'&parallel='+expected+'-'+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
+                  request:async()=>new Response(new ReadableStream({async start(c){
+                    live++;peak=Math.max(peak,live);if(live===expected){clearTimeout(timer);releaseBatch();}
+                    await batch;c.enqueue(bytes);live--;c.close();
+                  }}))});
+                const downloading=parallel.preload();let activeRejected=false;
+                try{parallel.setConcurrency(8);}catch(error){activeRejected=/active|running/.test(error.message);}
+                if(!activeRejected)throw Error('Active concurrency changed without settling downloads');
+                try{await downloading;}finally{clearTimeout(timer);}
+                if(peak!==expected||parallel.summary().concurrency!==expected||!parallel.summary().complete)
+                  throw Error('Configured global network limit was not respected: '+JSON.stringify({configured,expected,peak,state:parallel.summary()}));
+                parallel.setConcurrency(8);
+                if(parallel.summary().concurrency!==8)throw Error('Idle concurrency update was not applied');
+                for(const invalid of [0,129,1.5,'16',null]){
+                  let rejected=false;try{parallel.setConcurrency(invalid);}catch(error){rejected=error instanceof RangeError;}
+                  if(!rejected||parallel.summary().concurrency!==8)throw Error('Invalid concurrency changed an existing cache');
+                }
+                await parallel.preload();
+                if(parallel.summary().downloadedBytes!==0)throw Error('Changing concurrency invalidated the whole-file cache');
+                console.log('GLOBAL CONCURRENCY LIMIT VERIFIED',JSON.stringify({configured:configured??'default',expected,peak}));
+              }
               const cancelStore=memoryStore();let groupFetches=0,groupAborted=false;
               cancelStore.store.put=async()=>{throw Error('write fixture');};
               const group=createVerifiedChunkCache({entries:Array.from({length:3},(_,i)=>({...entry,path:url+'&cancel='+i})),cacheStorage:cancelStore.api,baseUrl:location.href,
@@ -689,7 +716,7 @@ jobs:
               if(rateSample.bytesPerSecond!==4||rateSample.etaSeconds!==1||rateSample.activeFiles!==1)throw Error('Network speed/ETA sample invalid: '+JSON.stringify(rateSample));
               release();await rateDone;await rate.preload();
               if(rate.summary().bytesPerSecond!==0||rate.summary().etaSeconds!==0||rate.summary().downloadedBytes!==8)throw Error('Warm metadata was counted as network transfer');
-              console.log('DOWNLOAD CORE VERIFIED: FOUR JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
+              console.log('DOWNLOAD CORE VERIFIED: DEFAULT 16, CONFIGURABLE 1-128 JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
               const resumeName='isaac-cloud-segment-resume',ranges=[];
               const ranged=(key,init)=>{
                 const range=new Headers(init.headers).get('range');ranges.push(range);
@@ -707,10 +734,12 @@ jobs:
               if(!pendingRange)throw Error('Resume fixture did not reach the second segment');
               await pausedCache.pause();
               if(await aborted!=='AbortError'||pausedCache.summary().complete||!pausedCache.summary().paused)throw Error('Pause contract violated');
+              pausedCache.setConcurrency(8);
+              if(pausedCache.summary().concurrency!==8)throw Error('Settled pause did not permit a concurrency change');
               const partial=await caches.open(resumeName+'-segments-v1'),keys=await partial.keys();
               if(keys.length!==1)throw Error('Completed segment was not durable');
               const savedKey=keys[0],savedPart=await partial.match(savedKey);
-              const resume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,baseUrl:location.href,request:async(...args)=>ranged(...args)});
+              const resume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,concurrency:128,baseUrl:location.href,request:async(...args)=>ranged(...args)});
               await resume.preload();
               if(JSON.stringify(ranges)!==JSON.stringify(['bytes=0-3','bytes=4-7'])||!resume.summary().complete||resume.summary().downloadedBytes!==4)throw Error('Recreated cache redownloaded a completed segment');
               if((await partial.keys()).length!==0)throw Error('Verified file left its partial segments');
