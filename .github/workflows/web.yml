@@ -420,6 +420,76 @@ jobs:
             }
           } finally {await browser.close();}
           JS
+      - name: Verify raw chunk CacheStorage and actual Worker range reuse
+        run: |
+          python3 -m http.server 8766 --bind 127.0.0.1 > output/chunk-server.log 2>&1 &
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import {chromium} from 'playwright';
+          const modules=JSON.parse(fs.readFileSync('game.html','utf8').match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
+          const worker=new Function('return '+modules['boot_web.mjs'].match(/const READER_WORKER=(`[^`]*`);/s)[1])();
+          const browser=await chromium.launch({headless:true});
+          const page=await browser.newPage();
+          let requests=0;
+          await page.route('**/fixture-chunk.bin*',async route=>{
+            requests++;
+            const req=route.request(),url=new URL(req.url());
+            let bytes=Buffer.from([0,1,2,3,4,5,6,7]);
+            if(url.searchParams.get('case')==='short')bytes=bytes.subarray(0,4);
+            if(url.searchParams.get('case')==='hash')bytes=Buffer.alloc(8,9);
+            const range=req.headers().range;
+            if(range){const [from,to]=range.slice(6).split('-').map(Number);await route.fulfill({status:206,body:bytes.subarray(from,to+1),headers:{'content-range':`bytes ${from}-${to}/8`}});}
+            else await route.fulfill({status:200,body:bytes});
+          });
+          try {
+            await page.goto('http://127.0.0.1:8766/web/chunk_cache.mjs');
+            const report=await page.evaluate(async worker=>{
+              const {createVerifiedChunkCache,CHUNKS}=await import('/web/chunk_cache.mjs');
+              if(CHUNKS.length!==38||CHUNKS.reduce((n,e)=>n+e.bytes,0)!==391071436)throw Error('Incomplete pinned inventory');
+              const bytes=new Uint8Array([0,1,2,3,4,5,6,7]);
+              const sha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+              const url=new URL('/fixture-chunk.bin?v=fixture',location.href).href;
+              const entry={path:url,bytes:8,sha256:sha},cacheName='isaac-cloud-raw-fixture';
+              const cache=createVerifiedChunkCache({entries:[entry],cacheName,baseUrl:location.href});
+              const init={headers:{Range:'bytes=2-5'}};
+              if(await cache.readRange(url,init)!==null)throw Error('Cold cache falsely hit');
+              const cold=await fetch(url,init);if(cold.status!==206)throw Error('Cold range network fallback failed');
+              await cache.preload();
+              if(cache.summary().memoizedBlobs!==0)throw Error('Preload retained full chunk blobs');
+              const warm=createVerifiedChunkCache({entries:[entry],cacheName,baseUrl:location.href,request:()=>{throw Error('Warm preload must not fetch');}});
+              await warm.preload();if(warm.summary().memoizedBlobs!==0)throw Error('Warm metadata check loaded blobs');
+              const response=await warm.readRange(url+'&w=2-5#ignored',init);
+              if(response.status!==206||response.headers.get('content-range')!=='bytes 2-5/8'||response.headers.get('content-length')!=='4')throw Error('Cached range headers invalid');
+              if(String([...new Uint8Array(await response.arrayBuffer())])!=='2,3,4,5')throw Error('Cached range bytes invalid');
+              await Promise.all(Array.from({length:4},()=>warm.readRange(url,init)));
+              if(warm.summary().memoizedBytes!==8)throw Error('Concurrent reads inflated blob accounting');
+              const source='const fetch=(...args)=>{postMessage({network:true});return globalThis.fetch(...args);};'+worker;
+              const w=new Worker(URL.createObjectURL(new Blob([source],{type:'text/javascript'})));
+              const workerResult=await new Promise((resolve,reject)=>{
+                const timer=setTimeout(()=>{w.terminate();reject(Error('Cached worker read timed out'));},3000);
+                w.onmessage=event=>{if(event.data.network){clearTimeout(timer);w.terminate();reject(Error('Warm Worker hit the network'));}else if(event.data.want===1){clearTimeout(timer);resolve(event.data);}};
+                w.onerror=event=>{clearTimeout(timer);reject(Error(event.message));};
+                w.postMessage({chunkCache:{entries:[entry],cacheName,baseUrl:location.href}});
+                w.postMessage({want:1,key:'fixture',url:url+'&w=2-5#r=2-5!8',len:4});
+              });w.terminate();
+              if(String([...new Uint8Array(workerResult.buf)])!=='2,3,4,5')throw Error('Actual Worker did not reuse raw bytes');
+              for(const kind of ['short','hash']){
+                const badUrl=url+'&case='+kind,badName='isaac-cloud-bad-'+kind;
+                const bad=createVerifiedChunkCache({entries:[{...entry,path:badUrl}],cacheName:badName,baseUrl:location.href});
+                let failed=false;try{await bad.preload();}catch{failed=true;}
+                if(!failed||await (await caches.open(badName)).match(badUrl))throw Error('Invalid chunk was cached');
+              }
+              const stuck=createVerifiedChunkCache({entries:[entry],cacheMs:30,cacheStorage:{open:()=>new Promise(()=>{})},baseUrl:location.href});
+              if(await stuck.readRange(url,init)!==null)throw Error('Stalled cache did not bypass');
+              const rejected=createVerifiedChunkCache({entries:[entry],cacheStorage:{open:()=>Promise.reject(Error('quota'))},baseUrl:location.href});
+              if(await rejected.readRange(url,init)!==null)throw Error('Rejected cache did not bypass');
+              return {workerBytes:[...new Uint8Array(workerResult.buf)],warm:warm.summary(),inventory:CHUNKS.length};
+            },worker);
+            assert.equal(requests,4); // cold range, full preload, short preload and hash mismatch
+            console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
+          }finally{await browser.close();}
+          JS
       - name: Verify committed page matches the generated page
         run: git diff --exit-code -- game.html
       - uses: actions/upload-artifact@v4

@@ -28,7 +28,8 @@ def apply_web_transport(page: str, source: Path) -> str:
     end = page.index('  function inWindow(p)', start)
     page = page[:start] + '''  async function piece1(s, i) {
     var size = chunkLen(s, i), key = s + ':' + i;
-    var raw = await resourceTransport.readWhole({key: key, url: name(s, i),
+    var cached = P.hostedFullCache && window.isaacFullChunkCache ? await window.isaacFullChunkCache.readWhole(name(s, i)) : null;
+    var raw = cached && wholeHeader(cached, size) ? await body(cached, s, i, 0, size) : await resourceTransport.readWhole({key: key, url: name(s, i),
       check: function(r) { return r.ok && wholeHeader(r, size); },
       read: function(r, progress) { return body(r, s, i, 0, size, progress); }});
     return remember(key, await unpackWhole(s, i, raw));
@@ -46,6 +47,11 @@ def apply_web_transport(page: str, source: Path) -> str:
         if page.count(old) != 1:
             raise ValueError(f'Portable transport insertion point changed: {old}')
         page = page.replace(old, new)
+    ready_anchor = 'ready: (async function () {'
+    if page.count(ready_anchor) != 1:
+        raise ValueError('Portable preload gate insertion point changed')
+    page = page.replace(ready_anchor, ready_anchor +
+        '\n      if (P.hostedFullCache) await window.isaacFullCacheReady;')
     registry = re.search(r'window\.__isaacModules = (.*?);</script>', page, re.S)
     if not registry:
         raise ValueError('Missing inline modules for reader diagnostics')
@@ -66,8 +72,29 @@ def apply_web_transport(page: str, source: Path) -> str:
         if guarded.count(old) != 1:
             raise ValueError(f'Reader fetch insertion point changed: {old}')
         guarded = guarded.replace(old, new)
-    guarded = guard + '\nconst readerFetch = createReaderFetch({fetch:fetch.bind(globalThis)});\n' + guarded
+    chunk_cache = (source.parent / 'chunk_cache.mjs').read_text().replace(
+        "import{createReaderFetch}from'./reader_guard.mjs';\n", '', 1).replace('export ', '')
+    if '`' in chunk_cache or '\\' in chunk_cache:
+        raise ValueError('Chunk cache cannot contain template delimiters or escapes')
+    message_anchor = '  const d = e.data;\n  if (d.xorKey)'
+    if guarded.count(message_anchor) != 1:
+        raise ValueError('Worker chunk cache configuration insertion point changed')
+    guarded = guarded.replace(message_anchor,
+        '  const d = e.data;\n  if (d.chunkCache) { rawChunkCache = createVerifiedChunkCache(d.chunkCache); return; }\n  if (d.xorKey)')
+    guarded = guard + '\n' + chunk_cache + '''
+const networkReaderFetch = createReaderFetch({fetch:fetch.bind(globalThis)});
+let rawChunkCache = null;
+const readerFetch = async(url, init) => {
+  const hit = rawChunkCache && await rawChunkCache.readRange(url, init);
+  return hit || networkReaderFetch(url, init);
+};
+''' + guarded
     boot = boot[:worker.start(1)] + guarded + boot[worker.end(1):]
+    config_anchor = 'const pdata=window.__isaacPortableData;'
+    if boot.count(config_anchor) != 1:
+        raise ValueError('Reader hosted chunk cache flag insertion point changed')
+    boot = boot.replace(config_anchor, config_anchor +
+        'if(pdata&&pdata.hostedFullCache===true)w.postMessage({chunkCache:{baseUrl:location.href}});')
     failure = "failRead(p.src,p.off,p.len,'the reader had no bytes')"
     if boot.count(failure) != 1:
         raise ValueError('Reader failure diagnostic insertion point changed')
