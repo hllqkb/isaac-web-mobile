@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from mobile_page import apply_mobile_page
+from web_transport import apply_web_transport
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,6 +17,7 @@ def main() -> None:
         raise ValueError('Pinned page is missing its resource manifest')
     manifest = json.loads(match.group(1))
     updated = apply_mobile_page(page, ROOT / 'mobile', manifest)
+    updated = apply_web_transport(updated, ROOT / 'web/resource_transport.mjs')
     current = re.search(r'window\.__isaacPortableData = (.*?);</script>', updated, re.S)
     if not current or current.group(1) != match.group(1):
         raise ValueError('Resource manifest changed while patching the page')

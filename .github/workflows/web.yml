@@ -48,6 +48,45 @@ jobs:
           }
           console.log('PINNED RESOURCE AND MODULE CHECKS PASSED');
           JS
+      - name: Verify transport failures, slow streams and immutable fallback
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import {createResourceTransport} from './web/resource_transport.mjs';
+          const page=fs.readFileSync('game.html','utf8');
+          const start=page.indexOf('  async function body('),end=page.indexOf('  function decode(',start);
+          const readBody=new Function('downloads','record',page.slice(start,end)+';return body;')([[{}]],()=>{});
+          const primary='https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@a78b90506b8a25436be6469904e6a59c2e186f82/r14b/b0.bin?v=bfa2c52b';
+          const mirror='https://raw.githubusercontent.com/chiikabu/boi-portable/a78b90506b8a25436be6469904e6a59c2e186f82/r14b/b0.bin?v=bfa2c52b';
+          const good=()=>new Response(new Uint8Array([1,2,3,4]),{headers:{'content-length':'4'}});
+          const check=r=>r.status===200&&!r.headers.get('content-range')&&(!r.headers.has('content-length')||r.headers.get('content-length')==='4');
+          const run=async(fetch,limits={})=>{
+            const urls=[],transport=createResourceTransport({headerMs:60,idleMs:60,...limits,fetch:async(url,init)=>{urls.push(url);return fetch(url,init,urls.length);}});
+            const bytes=await transport.readWhole({key:'0:0',url:primary,check,read:(r,progress)=>readBody(r,0,0,0,4,progress)});
+            return {bytes,urls,stats:transport.summary()};
+          };
+          for(const kind of ['headers','body','short','invalid']) {
+            const result=await run(async(url,{signal},attempt)=>{
+              if(attempt===2)return good();
+              if(kind==='headers')return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
+              if(kind==='body')return new Response(new ReadableStream({start(c){signal.addEventListener('abort',()=>c.error(Error('aborted')),{once:true});}}));
+              if(kind==='short')return new Response(new Uint8Array([1,2]));
+              return new Response('wrong',{status:503});
+            });
+            assert.deepEqual([...result.bytes],[1,2,3,4]);assert.deepEqual(result.urls,[primary,mirror]);
+            assert.equal(result.stats.fallbacks,1);assert.equal(result.stats.active.length,0);
+            console.log('TRANSPORT RECOVERY',kind,JSON.stringify(result.stats));
+          }
+          const slow=await run(async()=>new Response(new ReadableStream({async start(c){for(let i=1;i<=4;i++){await new Promise(r=>setTimeout(r,35));c.enqueue(new Uint8Array([i]));}c.close();}})),{idleMs:90});
+          assert.equal(slow.stats.timeouts,0);assert.equal(slow.urls.length,1);
+          console.log('SLOW STREAM EXCEEDS DEADLINE BUT RETAINS PROGRESS',slow.stats);
+          const notices=[],transport=createResourceTransport({fetch:async()=>new Response('unavailable',{status:503}),notify:text=>notices.push(text)});
+          await assert.rejects(transport.wait(transport.readWhole({key:'0:0',url:primary,check,read:()=>{throw Error('invalid response read');}}),'0:0'),/已尝试 2 个固定版本源/);
+          assert.equal(transport.summary().waiting,0);assert.ok(notices.at(-1).includes('读取失败'));
+          assert.ok(!fs.readFileSync('web/resource_transport.mjs','utf8').includes('location.reload'));
+          console.log('FINAL FAILURE REPORTED WITHOUT RELOAD');
+          JS
       - name: Prepare cloud browser
         run: |
           npm install --no-save playwright@1.56.1
