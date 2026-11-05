@@ -15,6 +15,33 @@ DEST = ROOT / 'dist'
 APK_URL = 'https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk'
 APK_SHA256 = 'd097d9ae686e978aea0c163fd96b3e0bef8f1e0143860e034b2e5b2635f3eebd'
 
+# Exact repository page identified from the user's working legacy URL.
+BASELINE_COMMIT = 'a174886b24a51abf1c3adc49a62d95cd8756a122'
+BASELINE_SHA256 = '57b3789532a75103189fec55c1586867c1f14708e29fa0cfb6c07dd5945a509c'
+
+
+def write_baselines() -> None:
+    content = (ROOT / 'upstream/game-baseline-a174886.html').read_bytes()
+    if sha256(content).hexdigest() != BASELINE_SHA256:
+        raise ValueError(f'Working baseline differs from repository commit {BASELINE_COMMIT}')
+    (DEST / 'game-baseline.html').write_bytes(content)
+    local = content.decode('utf-8')
+    match = re.search(r'window\.__isaacPortableData = (.*?);</script>', local, re.S)
+    if not match:
+        raise ValueError('Missing baseline resource manifest')
+    manifest = json.loads(match.group(1))
+    for stream in manifest['streams']:
+        base = stream.get('base', manifest['base'])
+        if stream['tag'] not in ('a', 'b') or not re.fullmatch(
+                r'https://cdn\.jsdelivr\.net/gh/chiikabu/boi-portable@[a-f0-9]{40}/[a-z0-9]+', base):
+            raise ValueError('Unpinned baseline resource origin')
+        local = local.replace(base, f"./chunks/{stream['tag']}")
+    local, count = re.subn(r'window\.isaacModCatalogue = .*?;</script>',
+                          'window.isaacModCatalogue = null;</script>', local, count=1)
+    if count != 1:
+        raise ValueError('Missing baseline mod catalogue switch')
+    (DEST / 'game-baseline-local.html').write_text(local)
+
 
 def download_apk(destination: Path) -> None:
     for attempt in range(3):
@@ -135,6 +162,7 @@ def main() -> None:
     shutil.copytree(ROOT / 'web', DEST / 'web')
     shutil.copytree(ROOT / 'assets', DEST / 'assets')
     (DEST / 'game.html').write_text(page)
+    write_baselines()
     (DEST / 'inventory.json').write_text(json.dumps(inventory, indent=2))
     (DEST / '404.html').write_text('<!doctype html><meta charset="utf-8"><title>资源不存在</title><p>资源不存在，请返回游戏入口。</p>')
     (DEST / '_headers').write_text('''/*

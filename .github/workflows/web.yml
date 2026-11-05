@@ -653,6 +653,32 @@ jobs:
           assert len(list(Path('dist/chunks').rglob('*.bin')))==38
           for i in range(7): assert Path(f'dist/preset-{i}.bin').read_bytes()==Path(f'preset-{i}.bin').read_bytes()
           print('SAME-ORIGIN RESOURCE BUNDLE VERIFIED; ENGINE, CLOCK, MOD PRESET AND DIAGNOSTICS PRESERVED')
+          from hashlib import sha256
+          fixed=Path('upstream/game-baseline-a174886.html').read_bytes()
+          assert sha256(fixed).hexdigest()=='57b3789532a75103189fec55c1586867c1f14708e29fa0cfb6c07dd5945a509c'
+          assert Path('dist/game-baseline.html').read_bytes()==fixed
+          baseline=fixed.decode('utf-8')
+          baseline_local=Path('dist/game-baseline-local.html').read_text()
+          legacy_manifest=json.loads(re.search(pattern,baseline,re.S)[1])
+          local_manifest=json.loads(re.search(pattern,baseline_local,re.S)[1])
+          for before,after in zip(legacy_manifest['streams'],local_manifest['streams'],strict=True):
+              assert after.get('base',local_manifest['base'])==f"./chunks/{before['tag']}"
+              if 'base' in before: after['base']=before['base']
+              else: after.pop('base',None)
+          local_manifest['base']=legacy_manifest['base']
+          assert local_manifest==legacy_manifest,'Baseline manifest changed beyond resource bases'
+          for text in [baseline,baseline_local]:
+              assert re.search(module_pattern,text,re.S)[1]==re.search(module_pattern,baseline,re.S)[1]
+              assert './web/diagnostics.mjs' in text
+              assert 'isaacFullCacheReady' not in text and 'readerFetch' not in text
+              assert 'reader_guard.mjs' not in text and './web/preload.mjs' not in text
+          expected=baseline
+          for stream in legacy_manifest['streams']:
+              expected=expected.replace(stream.get('base',legacy_manifest['base']),f"./chunks/{stream['tag']}")
+          expected=re.sub(r'window\.isaacModCatalogue = .*?;</script>','window.isaacModCatalogue = null;</script>',expected,count=1)
+          assert baseline_local==expected,'Baseline local includes changes beyond base and catalogue'
+          assert 'https://cdn.jsdelivr.net/' not in baseline_local
+          print('PINNED A174886 WORKING BASELINES VERIFIED; MODULES UNCHANGED, ONLY LOCAL BASES AND CATALOGUE DIFFER')
           PY
       - uses: actions/setup-node@v4
         with:
