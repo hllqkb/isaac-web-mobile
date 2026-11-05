@@ -293,7 +293,7 @@ jobs:
                     send(el,'pointerup');assert(trace.length===1&&trace[0].key===key,'Up did not trigger once');
                     el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1}));assert(trace.length===1,'Pointer click duplicated');
                     trace.length=0;
-                    for(const kind of ['move','outside-back','cancel','lost','leave','blur','hidden','disabled','state']) {
+                    for(const kind of ['move','outside-back','cancel','lost','leave','blur','hidden','disabled','state','menu-return']) {
                       send(el,'pointerdown');
                       if(kind==='move')send(el,'pointermove',41,12);
                       if(kind==='outside-back'){send(el,'pointermove',41,80);send(el,'pointermove');}
@@ -304,6 +304,7 @@ jobs:
                       if(kind==='hidden'){Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));delete document.hidden;}
                       if(kind==='disabled'){el.disabled=true;await Promise.resolve();el.disabled=false;await Promise.resolve();}
                       if(kind==='state'){current.paused=true;controls.update('game');current.paused=false;controls.update('game');}
+                      if(kind==='menu-return'){current.menu=5;controls.update('game');current.menu=0;controls.update('game');}
                       send(el,'pointerup');assert(!trace.length,'Cancelled tap executed '+kind);
                     }
                     send(el,'pointerdown');await new Promise(resolve=>setTimeout(resolve,700));send(el,'pointerup');assert(!trace.length,'Long hold executed');
