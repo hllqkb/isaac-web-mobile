@@ -1,0 +1,201 @@
+name: Verify shared Isaac web updates
+on:
+  push:
+    branches: ['site/mobile-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply shared patches without downloading game assets
+        run: python3 scripts/patch_game.py
+      - name: Verify module syntax, source identity and refresh-independent timing
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          import {createFramePacer} from './mobile/frame_clock.mjs';
+          const page=fs.readFileSync('game.html','utf8'),source=fs.readFileSync('upstream/game.html','utf8');
+          const registry=text=>JSON.parse(text.match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
+          const modules=registry(page);
+          const manifest=text=>text.match(/window\.__isaacPortableData = (.*?);<\/script>/s)[1];
+          if(manifest(page)!==manifest(source))throw Error('Pinned game resource manifest changed');
+          if(!page.includes('isaac-shared-ready'))throw Error('First-run import gate disappeared');
+          for(const [name,text] of Object.entries(modules)) {
+            const checked=spawnSync(process.execPath,['--check','--input-type=module'],{input:text,encoding:'utf8'});
+            if(checked.status!==0)throw Error(name+': '+checked.stderr);
+          }
+          for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery'])
+            if(modules['mobile_'+name+'.mjs']!==fs.readFileSync('mobile/'+name+'.mjs','utf8'))throw Error('Stale mobile module '+name);
+          for(const refresh of [60,90,120,144]) {
+            let time=0;
+            const pace=createFramePacer({now:()=>time,wait:async ms=>{time+=ms;},hidden:()=>false});
+            for(let n=0;n<300;n++){time+=1000/refresh;await pace();}
+            const updates=150/(time/1000);
+            if(updates<29.5||updates>30.2)throw Error('Refresh-dependent engine speed: '+JSON.stringify({refresh,updates}));
+            console.log('ENGINE TIMING',JSON.stringify({refresh,updates}));
+          }
+          console.log('PINNED RESOURCE AND MODULE CHECKS PASSED');
+          JS
+      - name: Prepare cloud browser
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+          mkdir -p output
+      - name: Verify phone touch, desktop keyboard, cache and existing player data
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 > output/server.log 2>&1 &
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {chromium} from 'playwright';
+          const html=fs.readFileSync('game.html','utf8');
+          const modules=JSON.parse(html.match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
+          const order=JSON.parse(html.match(/var order = (\[.*?\]);/s)[1]);
+          const browser=await chromium.launch({headless:true});
+          const errors=[];
+          async function controls(context,coarse) {
+            const page=await context.newPage();
+            page.on('pageerror',error=>errors.push(error.message));
+            await page.route('**/control-harness',route=>route.fulfill({contentType:'text/html',body:'<main></main>'}));
+            await page.goto('http://127.0.0.1:8765/control-harness');
+            await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#201912}#stage{position:absolute;left:140px;top:20px;width:480px;height:270px}canvas{width:100%;height:100%;background:#493b2c}</style><main><div id="stage"><canvas id="canvas" width="480" height="270"></canvas></div></main>');
+            await page.evaluate(async({modules,order})=>{
+              const urls={};
+              for(const name of order) {
+                const text=modules[name].replace(/(["'])\.\/([A-Za-z0-9_.-]+\.mjs)\1/g,(_m,_q,dep)=>JSON.stringify(urls[dep]||'./'+dep));
+                urls[name]=URL.createObjectURL(new Blob([text],{type:'text/javascript'}));
+              }
+              const {createTouchControls}=await import(urls['touch_controls.mjs']);
+              window.controlTrace=[];
+              window.controlState={ready:true,running:false,paused:false,blocked:false,menu:5,frame:0};
+              window.controls=createTouchControls({readState:()=>({...controlState,frame:Math.floor(performance.now()/16)}),
+                emit:(key,down)=>controlTrace.push({key,down}),guest:()=>null,onGesture:()=>{},
+                assetsUrl:'/unused',readAsset:async()=>{throw Error('Art is not needed by the input harness');}});
+              // Exercise the unchanged production keyboard handler without instantiating Wasm.
+              const boot=modules['boot_web.mjs'];
+              const from=boot.indexOf('const KEYS={'),to=boot.indexOf('let m;try{m=await Module(cfg)',from);
+              if(from<0||to<0)throw Error('Keyboard handler boundary changed');
+              const cfg={},m={HEAP32:new Int32Array(4)};
+              new Function('cfg','params','log','m',boot.slice(from,to))(cfg,new URLSearchParams(),()=>{},m);
+              window.readKeyboard=()=>{const events=[];while(cfg.isaacInputPoll(0,0))events.push(Array.from(m.HEAP32));return events;};
+            },{modules,order});
+            await page.waitForTimeout(200);
+            const actual=await page.evaluate(()=>matchMedia('(pointer:coarse)').matches);
+            if(actual!==coarse)throw Error('Browser pointer setup mismatch');
+            if(coarse) {
+              await page.locator('[data-mobile-action="menu-e"]').waitFor({state:'visible'});
+              await page.locator('[data-mobile-action="menu-e"]').tap();
+              await page.waitForFunction(()=>controlTrace.filter(e=>e.key==='e').length===2);
+              console.log('PHONE E TOUCH',await page.evaluate(()=>controlTrace));
+            } else {
+              if(!await page.locator('#touch-controls').isHidden())throw Error('Desktop has a touch overlay');
+              await page.locator('#canvas').focus();
+              await page.keyboard.press('w');await page.keyboard.press('ArrowUp');
+              const events=await page.evaluate(()=>readKeyboard());
+              for(const vk of [0x57,0x26]) {
+                if(!events.some(e=>e[1]===vk&&e[3]===1)||!events.some(e=>e[1]===vk&&e[3]===0))
+                  throw Error('Desktop keyboard event was blocked: '+JSON.stringify(events));
+              }
+              console.log('DESKTOP KEYBOARD',events);
+            }
+            await page.screenshot({path:'output/'+(coarse?'phone-controls':'desktop-controls')+'.png'});
+            await page.close();
+          }
+          try {
+            const phone=await browser.newContext({viewport:{width:850,height:390},hasTouch:true,isMobile:true});
+            await controls(phone,true);await phone.close();
+            const desktop=await browser.newContext({viewport:{width:1366,height:768},hasTouch:false});
+            await controls(desktop,false);await desktop.close();
+            const context=await browser.newContext();
+            await context.route('**/game.html',route=>route.fulfill({contentType:'text/html',body:'<p>Game navigation reached</p>'}));
+            const page=await context.newPage();
+            page.on('pageerror',error=>errors.push(error.message));
+            await page.goto('http://127.0.0.1:8765/');
+            await page.locator('#start').waitFor({state:'visible'});
+            await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            await page.locator('#start').click();await page.waitForURL('**/game.html',{timeout:120000});
+            const counts=await page.evaluate(async()=>{
+              async function rows(name,store){const db=await new Promise((r,j)=>{const q=indexedDB.open(name);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});try{return await new Promise((r,j)=>{const q=db.transaction(store).objectStore(store).getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)})}finally{db.close()}}
+              const mods=await rows('isaac-mods','mods'),files=await rows('isaac-mods','files'),saves=await rows('isaac-saves','files');
+              return{mods:mods.length,enabled:mods.filter(m=>m.enabled!==false).length,files:files.length,saves:saves.length,binary:files.every(f=>f.bytes instanceof Uint8Array)};
+            });
+            if(counts.mods!==41||counts.enabled!==35||counts.files!==1388||counts.saves!==33||!counts.binary)throw Error('Shared preset mismatch: '+JSON.stringify(counts));
+            console.log('INITIAL PRESET IMPORT',counts);
+            await page.evaluate(async()=>{
+              const db=await new Promise(r=>{const q=indexedDB.open('isaac-saves');q.onsuccess=()=>r(q.result)});
+              await new Promise((r,j)=>{const tx=db.transaction('files','readwrite');tx.objectStore('files').put({src:'',bytes:new Uint8Array([5,11,26])},'existing-player-progress');tx.oncomplete=r;tx.onerror=()=>j(tx.error)});db.close();
+              localStorage.removeItem('isaac-shared-ready');
+            });
+            let presetRequests=0;
+            page.on('request',request=>{if(/preset-\d+\.bin/.test(request.url()))presetRequests++;});
+            await page.goto('http://127.0.0.1:8765/');
+            await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            await page.locator('#start').click();await page.waitForURL('**/game.html');
+            const retained=await page.evaluate(async()=>{
+              const db=await new Promise(r=>{const q=indexedDB.open('isaac-saves');q.onsuccess=()=>r(q.result)});
+              try{return await new Promise(r=>{const q=db.transaction('files').objectStore('files').get('existing-player-progress');q.onsuccess=()=>r(Array.from(q.result.bytes))})}finally{db.close()}
+            });
+            if(JSON.stringify(retained)!=='[5,11,26]'||presetRequests)throw Error('Existing player data was re-imported');
+            console.log('EXISTING PLAYER DATA PRESERVED',retained);
+            const cache=await page.evaluate(async()=>{
+              const {createSoundBootCache}=await import('/mobile/boot_cache.mjs');
+              let calls=0;const expected=new Uint8Array(64).map((_,n)=>n);
+              const load=async()=>{calls++;return expected.slice()};
+              const read=createSoundBootCache('ci-sound',64);
+              const first=await read(load),stored=window.isaacBootCacheStats();
+              const second=await read(load),hit=window.isaacBootCacheStats();
+              const cache=await caches.open('isaac-decoded-sound-v1'),key=(await cache.keys())[0];
+              await cache.put(key,new Response(new Uint8Array([1])));
+              const third=await read(load),repaired=window.isaacBootCacheStats();
+              return{calls,stored,hit,repaired,same:[first,second,third].every(b=>b.every((n,i)=>n===expected[i]))};
+            });
+            if(cache.calls!==2||!cache.same||cache.hit.sfx!=='hit'||cache.repaired.sfx!=='stored')throw Error('Decoded sound cache failed: '+JSON.stringify(cache));
+            console.log('SOUND CACHE AND CORRUPT RECORD RECOVERY',cache);
+            const saved=await page.evaluate(async()=>{
+              const {createSaveWriter}=await import('/mobile/save_guard.mjs');
+              const db=await new Promise((resolve,reject)=>{const q=indexedDB.open('ci-save-guard',1);q.onupgradeneeded=()=>q.result.createObjectStore('files');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
+              const queue=[{key:'slot',src:'',bytes:new Uint8Array([1])},{key:'other',src:'',bytes:new Uint8Array([3])}];
+              let abort=true;
+              const writer=createSaveWriter({store:'files',queue,database:()=>({transaction:(...args)=>{
+                const tx=db.transaction(...args);
+                if(abort){abort=false;queueMicrotask(()=>{queue.push({key:'slot',src:'',bytes:new Uint8Array([2])});tx.abort()});}
+                return tx;
+              }})});
+              let failed=false;try{await writer.flush();}catch{failed=true;}
+              const retained=writer.stats();
+              const count=await new Promise(resolve=>{const q=db.transaction('files').objectStore('files').count();q.onsuccess=()=>resolve(q.result)});
+              await writer.flush();
+              const value=await new Promise(resolve=>{const q=db.transaction('files').objectStore('files').get('slot');q.onsuccess=()=>resolve(Array.from(q.result.bytes))});
+              const complete=writer.stats();db.close();
+              return{failed,retained,count,value,complete};
+            });
+            if(!saved.failed||saved.count!==0||saved.retained.pending!==2||saved.value[0]!==2||saved.complete.pending!==0)
+              throw Error('Aborted save did not retain the newest write: '+JSON.stringify(saved));
+            console.log('ABORTED SAVE RETAINED AND RETRIED',saved);
+            await context.close();
+            if(errors.length)throw Error('Browser errors: '+errors.join('\n'));
+          } finally {
+            fs.writeFileSync('output/browser.log',errors.join('\n'));
+            await browser.close();
+          }
+          JS
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Patched-web-game
+          path: game.html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Web-verification
+          path: output/
