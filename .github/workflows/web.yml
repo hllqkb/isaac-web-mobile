@@ -556,13 +556,13 @@ jobs:
             },worker);
             assert.equal(requests,4); // cold range, full preload, short preload and hash mismatch
             console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
-            for(const scenario of ['success','retry','continue']) {
+            for(const scenario of ['success','retry','continue','latewake','denied']) {
               const gatePage=await browser.newPage();
               await gatePage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
                 export function createVerifiedChunkCache(){let completed=0;return {
-                  summary:()=>({received:completed?8:0,total:8,completed}),
+                  summary:()=>({received:completed?8:0,total:8,completed,bytesPerSecond:2097152,etaSeconds:65,activeFiles:2,retrying:!!window.__retrying,attempt:2}),
                   preload:()=>{window.__preloadCalls=(window.__preloadCalls||0)+1;
-                    if(window.__scenario==='success')return new Promise(resolve=>{window.__release=()=>{completed=38;resolve();};});
+                    if(['success','latewake','denied'].includes(window.__scenario))return new Promise(resolve=>{window.__release=()=>{completed=38;resolve();};});
                     if(window.__scenario==='retry'&&window.__preloadCalls>1){completed=38;return Promise.resolve();}
                     return Promise.reject(Error('quota fixture'));
                   }
@@ -571,16 +571,44 @@ jobs:
               await gatePage.goto('http://127.0.0.1:8766/web/preload.mjs');
               await gatePage.setContent('<div id="overlay">original game loading</div>');
               await gatePage.evaluate(async scenario=>{
-                window.__scenario=scenario;window.__finished=false;
+                window.__scenario=scenario;window.__finished=false;window.__wakeRequests=0;window.__wakeReleases=0;
+                Object.defineProperty(navigator,'wakeLock',{configurable:true,value:{request:()=>{
+                  window.__wakeRequests++;
+                  if(scenario==='denied')return Promise.reject(Error('wake lock denied'));
+                  const held=new EventTarget();held.release=async()=>{window.__wakeReleases++;held.dispatchEvent(new Event('release'));};
+                  return scenario==='latewake'?new Promise(resolve=>{window.__resolveWake=()=>resolve(held);}):Promise.resolve(held);
+                }}});
                 const {prepareResources}=await import('/web/preload.mjs?fixture='+scenario);
                 window.__gate=prepareResources().then(()=>{window.__finished=true;});
               },scenario);
               assert.equal(await gatePage.evaluate(()=>window.__finished),false);
               assert.ok(await gatePage.locator('section[aria-label="准备游戏资源"]').isVisible());
-              if(scenario==='success')await gatePage.evaluate(()=>window.__release());
+              if(['success','latewake','denied'].includes(scenario)) {
+                await gatePage.waitForFunction(()=>window.__wakeRequests===1);
+                await gatePage.waitForFunction(()=>document.querySelector('[data-transfer]').textContent.includes('2.0 MiB/s'));
+                assert.match(await gatePage.locator('[data-transfer]').innerText(),/约 1 分 5 秒/);
+                if(scenario==='success') {
+                  await gatePage.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+                  await gatePage.waitForFunction(()=>window.__wakeReleases===1);
+                  await gatePage.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
+                  await gatePage.waitForFunction(()=>window.__wakeRequests===2);
+                  await gatePage.evaluate(()=>dispatchEvent(new Event('pagehide')));
+                  await gatePage.waitForFunction(()=>window.__wakeReleases===2);
+                  await gatePage.evaluate(()=>dispatchEvent(new Event('pageshow')));
+                  await gatePage.waitForFunction(()=>window.__wakeRequests===3);
+                  await gatePage.evaluate(()=>{window.__retrying=true;});
+                  await gatePage.waitForFunction(()=>document.querySelector('[data-progress]').textContent.includes('正在重试'));
+                  assert.match(await gatePage.locator('[data-transfer]').innerText(),/正在重新连接/);
+                  assert.doesNotMatch(await gatePage.locator('[data-transfer]').innerText(),/约 .*秒/);
+                  await gatePage.evaluate(()=>{window.__retrying=false;});
+                }
+                await gatePage.evaluate(()=>window.__release());
+              }
               else {
                 await gatePage.locator('[data-error]').waitFor({state:'visible'});
                 assert.ok((await gatePage.locator('[data-error]').innerText()).includes('临时加载仍可能卡顿'));
+                await gatePage.waitForFunction(()=>window.__wakeReleases===1);
+                assert.match(await gatePage.locator('[data-transfer]').innerText(),/下载已暂停/);
                 await gatePage.locator(scenario==='retry'?'[data-retry]':'[data-continue]').click();
               }
               await gatePage.waitForFunction(()=>window.__finished);
@@ -588,6 +616,14 @@ jobs:
               assert.equal(await gatePage.locator('#overlay').isVisible(),true);
               assert.equal(await gatePage.evaluate(()=>window.isaacPreloadCompatibility===true),scenario==='continue');
               if(scenario==='retry')assert.equal(await gatePage.evaluate(()=>window.__preloadCalls),2);
+              if(scenario!=='continue')assert.equal(await gatePage.evaluate(()=>window.isaacPreloadError),null);
+              if(scenario==='latewake') {
+                await gatePage.evaluate(()=>window.__resolveWake());
+                await gatePage.waitForFunction(()=>window.__wakeReleases===1);
+              } else if(scenario!=='denied')await gatePage.waitForFunction(()=>window.__wakeReleases===window.__wakeRequests);
+              const requestsBefore=await gatePage.evaluate(()=>window.__wakeRequests);
+              await gatePage.evaluate(()=>{document.dispatchEvent(new Event('visibilitychange'));dispatchEvent(new Event('pageshow'));});
+              assert.equal(await gatePage.evaluate(()=>window.__wakeRequests),requestsBefore);
               console.log('PRELOAD GATE LIFETIME VERIFIED',scenario);
               await gatePage.close();
             }
