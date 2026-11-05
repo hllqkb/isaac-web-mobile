@@ -6,7 +6,7 @@ let previous = null;
 try { const text=localStorage.getItem(key); previous=text && text.length<=48000 ? JSON.parse(text) : null; } catch {}
 const samples = [], errors = [];
 let frame = null, advancedAt = performance.now(), persistedAt = -Infinity;
-let current = null, opened = false, baseline = null;
+let current = null, opened = false, baseline = null, lastSampleAt = null, maxVisibleSampleGapMs = 0;
 const started = new Date().toISOString();
 
 const style = document.createElement('style');
@@ -78,7 +78,7 @@ function render() {
   fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计），游戏更新与其解耦`;
   fields.get('待取资源').textContent = resource ? `${resource.waiting} 个等待，${resource.active.length} 个下载\n${resource.active.map(x => `${x.key}: ${(x.received/1048576).toFixed(1)} MB，${x.fallback ? '备用源' : '主源'}`).join('\n')}` : '尚未初始化';
   fields.get('备用与失败').textContent = resource ? `备用 ${resource.fallbacks} · 超时 ${resource.timeouts} · 最终失败 ${resource.failures}` : '--';
-  fields.get('待写存档').textContent = save ? `${save.pending ?? '--'} 个待写${save.error ? ` · ${limit(save.error,180)}` : ''}` : '尚未初始化';
+  fields.get('待写存档').textContent = save ? `${save.pending ?? '--'} 个待写 · ${save.inFlight ?? 0} 个写入中${save.lastError ? ` · ${limit(save.lastError,180)}` : ''}` : '尚未初始化';
   fields.get('最近错误').textContent = errors.at(-1)?.text || current.crash?.error || '暂未捕获';
   fields.get('上次快照').textContent = previous?.at || '暂无';
 }
@@ -116,6 +116,9 @@ function persist() {
 }
 function sample() {
   const now = performance.now(), next = Number.isFinite(window.isaacFrame) ? window.isaacFrame : null;
+  const sampleGapMs=lastSampleAt===null ? 0 : Math.round(now-lastSampleAt);
+  if (!document.hidden && current && !current.hidden) maxVisibleSampleGapMs=Math.max(maxVisibleSampleGapMs,sampleGapMs);
+  lastSampleAt=now;
   if (next !== frame) { frame = next; advancedAt = now; }
   const elapsed = baseline && !document.hidden && !baseline.hidden ? now - baseline.ms : 0;
   const rate = elapsed >= 500 && frame !== null && baseline.frame !== null && frame >= baseline.frame
@@ -123,11 +126,11 @@ function sample() {
   if (!baseline || elapsed >= 500 || document.hidden !== baseline.hidden) baseline = {ms:now,frame,hidden:document.hidden};
   const crash=read('isaacLastCrash');
   current = {at:new Date().toISOString(),frame,framesPerSecond:rate,refreshHz,
-    sinceAdvanceMs:Math.round(now-advancedAt),hidden:document.hidden,focused:document.hasFocus(),
+    sinceAdvanceMs:Math.round(now-advancedAt),sampleGapMs,maxVisibleSampleGapMs,hidden:document.hidden,focused:document.hasFocus(),
     done:window.isaacDone == null ? null : limit(window.isaacDone,1500),
     resources:read('isaacResourceStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
     crash:crash ? {at:crash.at,title:limit(crash.title,256),error:limit(crash.error,2000)} : null};
-  samples.push({at:current.at,frame,hidden:current.hidden,waiting:current.resources?.waiting ?? null,
+  samples.push({at:current.at,frame,hidden:current.hidden,sampleGapMs,waiting:current.resources?.waiting ?? null,
     received:current.resources?.active.reduce((n,x)=>n+x.received,0) ?? null,pending:current.save?.pending ?? null});
   if (samples.length > 60) samples.shift();
   if (now-persistedAt>=5000) persist();
