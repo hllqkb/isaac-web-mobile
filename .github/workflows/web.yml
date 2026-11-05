@@ -106,6 +106,9 @@ jobs:
           const html=fs.readFileSync('game.html','utf8');
           const modules=JSON.parse(html.match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
           const order=JSON.parse(html.match(/var order = (\[.*?\]);/s)[1]);
+          const touchStyleStart=html.indexOf('/* Touch play:');
+          if(touchStyleStart<0)throw Error('Production touch styles missing');
+          const touchStyles=html.slice(touchStyleStart,html.indexOf('</style>',touchStyleStart));
           const browser=await chromium.launch({headless:true});
           const errors=[];
           async function controls(context,coarse) {
@@ -113,7 +116,7 @@ jobs:
             page.on('pageerror',error=>errors.push(error.message));
             await page.route('**/control-harness',route=>route.fulfill({contentType:'text/html',body:'<main></main>'}));
             await page.goto('http://127.0.0.1:8765/control-harness');
-            await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#201912}#stage{position:absolute;left:140px;top:20px;width:480px;height:270px}canvas{width:100%;height:100%;background:#493b2c}</style><main><div id="stage"><canvas id="canvas" width="480" height="270"></canvas></div></main>');
+            await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#201912}#stage{position:absolute;left:140px;top:20px;width:480px;height:270px}#canvas{display:block;width:100%;height:100%;background:#493b2c}${touchStyles}</style><main><div id="stage"><canvas id="canvas" width="480" height="270"></canvas></div></main>`);
             await page.evaluate(async({modules,order})=>{
               const urls={};
               for(const name of order) {
@@ -138,6 +141,32 @@ jobs:
             const actual=await page.evaluate(()=>matchMedia('(pointer:coarse)').matches);
             if(actual!==coarse)throw Error('Browser pointer setup mismatch');
             if(coarse) {
+              await page.evaluate(()=>{
+                const stage=document.querySelector('#stage');
+                Object.assign(stage.style,{left:'50%',top:'50%',transform:'translate(-50%,-50%)',width:'min(100vw, calc(100vh * 16 / 9))',height:'auto',aspectRatio:'16 / 9'});
+                document.body.style.background='#000';
+              });
+              for(const [width,height] of [[850,390],[792,375],[700,390],[375,812]]) {
+                await page.setViewportSize({width,height});
+                await page.evaluate(()=>dispatchEvent(new Event('resize')));
+                const layout=await page.evaluate(()=>{
+                  const box=el=>{const r=el.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+                  return{stage:box(document.querySelector('#stage')),buttons:[...document.querySelectorAll('.mobile-tools > button')].map(box)};
+                });
+                if(layout.buttons.length!==4)throw Error('Expected four rail buttons');
+                layout.buttons.forEach((button,index)=>{
+                  if(button.width<44||button.height<44||button.x<0||button.y<0||button.bottom>height)
+                    throw Error('Rail button is too small or clipped: '+JSON.stringify(layout));
+                  if(index&&(Math.abs(button.x-layout.buttons[0].x)>.1||button.y<layout.buttons[index-1].bottom+5))
+                    throw Error('Rail is not a single vertical column: '+JSON.stringify(layout));
+                  const outsideGame=width>height ? button.right<=layout.stage.x-4 : button.bottom<=layout.stage.y-4;
+                  if(!outsideGame)throw Error('Rail overlaps the game or HUD: '+JSON.stringify(layout));
+                });
+                console.log('BUTTON RAIL OUTSIDE GAME',JSON.stringify({width,height,...layout}));
+                await page.screenshot({path:`output/phone-left-rail-${width}x${height}.png`});
+              }
+              await page.setViewportSize({width:850,height:390});
+              await page.evaluate(()=>dispatchEvent(new Event('resize')));
               await page.locator('[data-mobile-action="menu-e"]').waitFor({state:'visible'});
               await page.locator('[data-mobile-action="menu-e"]').tap();
               await page.waitForFunction(()=>controlTrace.filter(e=>e.key==='e').length===2);
