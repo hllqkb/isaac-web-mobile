@@ -735,7 +735,7 @@ jobs:
                 return entryRequests===1?route.fulfill({status:404,body:'module unavailable'}):route.fulfill({contentType:'text/javascript',body:'export async function prepareResources(){window.__retried=true;}'});
               });
               else await retryPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({status:404,body:'dependency unavailable'}));
-              await retryPage.goto('http://127.0.0.1:8767/loader-fixture.html');
+              await retryPage.goto('http://127.0.0.1:8767/loader-fixture.html?preload=on');
               await retryPage.locator('[data-preload-loader-error]').waitFor({state:'visible'});
               assert.equal(await retryPage.evaluate(()=>window.__launched),false);
               if(failure==='entry'){
@@ -751,7 +751,7 @@ jobs:
               console.log('PRELOAD IMPORT FAILURE RECOVERS BEFORE GAME LAUNCH',failure);
               await retryPage.close();
             }
-            for(const query of ['preload=off','preload=off&framepacer=off']){
+            for(const query of ['','preload=off','preload=off&framepacer=off']){
               const bypass=await browser.newPage();let imports=0;
               const fixture='<script>window.__isaacPortableData={hostedFullCache:true};window.__launched=false;</script><script>'+loader+'</script><script>window.isaacFullCacheReady.then(()=>{window.__launched=true;});</script>';
               await bypass.route('**/loader-fixture.html*',route=>route.fulfill({contentType:'text/html',body:fixture}));

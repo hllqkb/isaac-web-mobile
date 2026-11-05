@@ -85,14 +85,14 @@ def main() -> None:
     if count != 1 or 'https://cdn.jsdelivr.net/' in page:
         raise ValueError('Unbundled third-party resource dependency')
 
-    # Only the same-origin hosted build waits for complete, verified resources.
+    # Complete verified resources are an explicit hosted-only preload=on experiment.
     # The legacy CDN page and Android package keep their existing startup path.
     hosted_manifest = re.search(r'window\.__isaacPortableData = (.*?);</script>', page, re.S)
     if not hosted_manifest:
         raise ValueError('Missing hosted preload manifest')
     hosted_data = json.loads(hosted_manifest.group(1))
     hosted_data['hostedFullCache'] = True
-    preload_script = """<script>if(new URLSearchParams(location.search).get('preload')==='off'){
+    preload_script = """<script>if(new URLSearchParams(location.search).get('preload')!=='on'){
   window.__isaacPortableData.hostedFullCache=false;
   window.isaacFullChunkCache=null;
   window.isaacFullCacheReady=Promise.resolve();
