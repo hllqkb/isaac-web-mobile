@@ -43,6 +43,7 @@ export function createMobileButtons({root, input, state, resetControls = () => i
   const terminal = createMobileConsole({root,state,gesture,resetControls,listen});
   let dropHold = null;
   const tapGestures = new Set();
+  let lastTapContext = null;
   const cancelTaps = () => {for (const cancel of [...tapGestures]) cancel();};
   const tapContext = () => {
     const value = state();
@@ -200,6 +201,8 @@ export function createMobileButtons({root, input, state, resetControls = () => i
   let lastTime = performance.now(), lastFrame = 0, lastUpdate = 0, lastCounter = null, lastToolsContext = '';
   return {update(mode) {
     const current = state();
+    const context = tapContext();
+    if (context !== lastTapContext) {cancelTaps(); lastTapContext = context;}
     const run = readMobileRunState(current), dead = !!run?.dead;
     const skipping = !!(current.cinematic || current.transit || current.cutscene);
     const showTools = current.ready && !current.blocked && !window.isaacDone && ['game','menu'].includes(mode);
