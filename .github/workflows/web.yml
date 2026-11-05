@@ -351,6 +351,18 @@ jobs:
             await page.goto('http://127.0.0.1:8765/');
             await page.locator('#start').waitFor({state:'visible'});
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            for (const [name, viewport] of [['desktop',{width:1366,height:900}],['phone-portrait',{width:390,height:844}],['phone-landscape',{width:850,height:390}]]) {
+              await page.setViewportSize(viewport);
+              await page.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode()));});
+              await page.waitForFunction(()=>[...document.querySelectorAll('.scene,.sheet')].every(element=>getComputedStyle(element).opacity==='1'));
+              if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Landing CTA label changed');
+              const bounds=await page.locator('#start').boundingBox();
+              if(!bounds||bounds.x<0||bounds.y<0||bounds.x+bounds.width>viewport.width||bounds.y+bounds.height>viewport.height)
+                throw Error('Start button is outside the first viewport: '+JSON.stringify({name,bounds}));
+              if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Landing page horizontal overflow: '+name);
+              await page.screenshot({path:'output/landing-'+name+'.png',fullPage:true,animations:'disabled'});
+            }
+            await page.setViewportSize({width:1366,height:900});
             await page.locator('#start').click();await page.waitForURL('**/game.html',{timeout:120000});
             const counts=await page.evaluate(async()=>{
               async function rows(name,store){const db=await new Promise((r,j)=>{const q=indexedDB.open(name);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});try{return await new Promise((r,j)=>{const q=db.transaction(store).objectStore(store).getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)})}finally{db.close()}}
@@ -368,6 +380,7 @@ jobs:
             page.on('request',request=>{if(/preset-\d+\.bin/.test(request.url()))presetRequests++;});
             await page.goto('http://127.0.0.1:8765/');
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Existing-save CTA label changed');
             await page.locator('#start').click();await page.waitForURL('**/game.html');
             const retained=await page.evaluate(async()=>{
               const db=await new Promise(r=>{const q=indexedDB.open('isaac-saves');q.onsuccess=()=>r(q.result)});
@@ -552,9 +565,53 @@ jobs:
               if(await stuck.readRange(url,init)!==null)throw Error('Stalled cache did not bypass');
               const rejected=createVerifiedChunkCache({entries:[entry],cacheStorage:{open:()=>Promise.reject(Error('quota'))},baseUrl:location.href});
               if(await rejected.readRange(url,init)!==null)throw Error('Rejected cache did not bypass');
+              const memoryStore=()=>{
+                const records=new Map();
+                const store={match:async key=>records.get(key)?.clone(),put:async(key,response)=>{records.set(key,response.clone());}};
+                return {store,api:{open:async()=>store}};
+              };
+              const immediate=()=>Promise.resolve();
+              let attempts=0,retryCache;const snapshots=[],retryStore=memoryStore();
+              retryCache=createVerifiedChunkCache({entries:[entry],cacheStorage:retryStore.api,baseUrl:location.href,
+                retryWait:()=>{snapshots.push(retryCache.summary());return immediate();},
+                request:async()=>new Response(++attempts===1?bytes.slice(0,4):bytes)});
+              await retryCache.preload();
+              if(attempts!==2||snapshots[0].received!==0||snapshots[0].downloadedBytes!==4||!snapshots[0].retrying||retryCache.summary().received!==8||retryCache.summary().downloadedBytes!==12)throw Error('Attempt progress or transfer accounting is wrong');
+              const quotaStore=memoryStore();let writes=0,quotaFetches=0;
+              const originalPut=quotaStore.store.put;
+              quotaStore.store.put=async(...args)=>{if(++writes===1)throw Error('quota fixture');return originalPut(...args);};
+              const quotaCache=createVerifiedChunkCache({entries:[entry],cacheStorage:quotaStore.api,baseUrl:location.href,request:async()=>{quotaFetches++;return new Response(bytes);}});
+              try{await quotaCache.preload();}catch{}
+              await quotaCache.preload();
+              if(quotaFetches!==1||quotaCache.summary().completed!==1)throw Error('Cache write retry redownloaded verified bytes');
+              let live=0,peak=0;const parallelStore=memoryStore();
+              const parallel=createVerifiedChunkCache({entries:Array.from({length:4},(_,i)=>({...entry,path:url+'&parallel='+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
+                request:async()=>new Response(new ReadableStream({async start(c){live++;peak=Math.max(peak,live);await new Promise(resolve=>setTimeout(resolve,10));c.enqueue(bytes);live--;c.close();}}))});
+              await parallel.preload();if(peak!==2)throw Error('Expected two concurrent download jobs: '+peak);
+              const cancelStore=memoryStore();let groupFetches=0,groupAborted=false;
+              cancelStore.store.put=async()=>{throw Error('write fixture');};
+              const group=createVerifiedChunkCache({entries:Array.from({length:3},(_,i)=>({...entry,path:url+'&cancel='+i})),cacheStorage:cancelStore.api,baseUrl:location.href,
+                request:async(key,{signal})=>{groupFetches++;if(key.endsWith('cancel=0'))return new Response(bytes);
+                  return new Response(new ReadableStream({start(c){signal.addEventListener('abort',()=>{groupAborted=true;c.error(Error('aborted fixture'));},{once:true});}}));}});
+              try{await group.preload();}catch{}
+              if(!groupAborted||groupFetches!==2||group.summary().activeFiles!==0||group.summary().active)throw Error('First failure left a background download or queued another file');
+              let offlineFetches=0;const offlineStore=memoryStore();
+              const offline=createVerifiedChunkCache({entries:[entry],cacheStorage:offlineStore.api,baseUrl:location.href,retryWait:immediate,request:async()=>{offlineFetches++;throw Error('offline');}});
+              try{await offline.preload();}catch{}
+              if(offlineFetches!==3||offline.summary().received!==0||offline.summary().downloadedBytes!==0||offline.summary().etaSeconds!==null)throw Error('Offline retry bound or ETA invalid');
+              let clock=0,release;const rateStore=memoryStore();
+              const rate=createVerifiedChunkCache({entries:[entry],cacheStorage:rateStore.api,baseUrl:location.href,now:()=>clock,
+                request:async()=>new Response(new ReadableStream({start(c){c.enqueue(bytes.slice(0,4));return new Promise(resolve=>{release=()=>{c.enqueue(bytes.slice(4));c.close();resolve();};});}}))});
+              const rateDone=rate.preload();
+              for(let i=0;i<100&&rate.summary().downloadedBytes!==4;i++)await new Promise(resolve=>setTimeout(resolve,1));
+              clock=1000;const rateSample=rate.summary();
+              if(rateSample.bytesPerSecond!==4||rateSample.etaSeconds!==1||rateSample.activeFiles!==1)throw Error('Network speed/ETA sample invalid: '+JSON.stringify(rateSample));
+              release();await rateDone;await rate.preload();
+              if(rate.summary().bytesPerSecond!==0||rate.summary().etaSeconds!==0||rate.summary().downloadedBytes!==8)throw Error('Warm metadata was counted as network transfer');
+              console.log('DOWNLOAD CORE VERIFIED: TWO JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
               return {workerBytes:[...new Uint8Array(workerResult.buf)],warm:warm.summary(),inventory:CHUNKS.length};
             },worker);
-            assert.equal(requests,4); // cold range, full preload, short preload and hash mismatch
+            assert.equal(requests,8); // cold range, full preload, three short and three hash attempts
             console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
             for(const scenario of ['success','retry','continue','latewake','denied']) {
               const gatePage=await browser.newPage();
