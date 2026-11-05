@@ -597,7 +597,7 @@ function isaacRecipeDecode(src, vorbis) {
     if (!r.body) return;
     try { await r.body.cancel(); } catch (e) { /* retain the original response error */ }
   }
-  async function body(r, s, i, from, size) {
+  async function body(r, s, i, from, size, onBytes) {
     var d = downloads[s][i], u, n = 0;
     if (r.body && r.body.getReader) {
       var reader = r.body.getReader();
@@ -607,7 +607,7 @@ function isaacRecipeDecode(src, vorbis) {
           var part = await reader.read();
           if (part.done) break;
           if (n + part.value.length > size) throw new Error('piece ' + s + ':' + i + ': wrong body length');
-          u.set(part.value, n); n += part.value.length;
+          u.set(part.value, n); n += part.value.length; if (onBytes && part.value.length) onBytes(part.value.length);
           // Do not claim the entire response until EOF validates its length.
           if (n < size) record(d, from, from + n, false);
         }
@@ -694,19 +694,100 @@ function isaacRecipeDecode(src, vorbis) {
                              function (e) { flight.delete(key); throw e; });
       flight.set(key, pr);
     }
-    return pre ? pr : pr.then(function (u) { wasRead(key); return u; });
+    return pre ? pr : resourceTransport.wait(pr, key).then(function (u) { wasRead(key); return u; });
   }
+function createResourceTransport({fetch: request, headerMs = 30000, idleMs = 30000, notify = () => {}}) {
+  const active = new Map(), waiting = new Map();
+  const totals = {attempts: 0, fallbacks: 0, failures: 0, timeouts: 0};
+  let ticker = null, lastError = '';
+  async function readWhole({key, url, check, read}) {
+    // A fallback must identify the exact same repository, commit and file.
+    const match = /^https:\/\/cdn\.jsdelivr\.net\/gh\/([^/@]+\/[^/@]+)@([a-f0-9]{40})\/(.+)$/.exec(url);
+    const urls = [url];
+    if (match) urls.push(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}`);
+    let failure;
+    for (let attempt = 0; attempt < urls.length; attempt++) {
+      const controller = new AbortController();
+      const item = {received: 0, fallback: attempt > 0, phase: 'headers'};
+      active.set(key, item);
+      totals.attempts++; if (attempt) totals.fallbacks++;
+      let timer, timedOut = false, rejectTimeout;
+      const deadline = new Promise((_, reject) => { rejectTimeout = reject; });
+      const arm = ms => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          timedOut = true; totals.timeouts++;
+          const error = new Error(`resource ${key}: ${item.phase} idle timeout`);
+          rejectTimeout(error); controller.abort();
+        }, ms);
+      };
+      arm(headerMs);
+      try {
+        const work = (async () => {
+          const response = await request(urls[attempt], {signal: controller.signal});
+          if (timedOut) throw new Error(`resource ${key}: request timed out`);
+          item.phase = 'body'; arm(idleMs);
+          if (!check(response)) {
+            controller.abort();
+            throw new Error(`resource ${key}: invalid whole response (HTTP ${response.status})`);
+          }
+          return await read(response, bytes => {
+            if (timedOut) return;
+            item.received += bytes;
+            arm(idleMs);
+          });
+        })();
+        const bytes = await Promise.race([work, deadline]);
+        return bytes;
+      } catch (error) {
+        controller.abort(); failure = error;
+      } finally {
+        clearTimeout(timer);
+        if (active.get(key) === item) active.delete(key);
+      }
+    }
+    totals.failures++;
+    throw new Error(`资源 ${key} 读取失败，已尝试 ${urls.length} 个固定版本源。${failure?.message || failure}`);
+  }
+  async function wait(promise, key) {
+    const token = Symbol(key);
+    lastError = '';
+    // Separate tokens keep concurrent reads of one chunk from hiding each other.
+    if (!ticker) ticker = setInterval(() => {
+      const pending = [...waiting.values()].some(item => Date.now() - item.since >= 500);
+      if (!pending) return;
+      const item = [...waiting.values()].find(item => Date.now() - item.since >= 500);
+      const current = active.get(item.key);
+      notify(`${current?.fallback ? '资源连接重试中' : '正在读取游戏资源'}${current ? ` ${(current.received / 1048576).toFixed(1)} MB` : ''}，请稍候`);
+    }, 250);
+    waiting.set(token, {key, since: Date.now()});
+    try { return await promise; }
+    catch (error) { lastError = error.message || String(error); throw error; }
+    finally {
+      waiting.delete(token);
+      if (!waiting.size) { clearInterval(ticker); ticker = null; notify(lastError); }
+    }
+  }
+  return {readWhole, wait, summary: () => ({...totals, active: [...active].map(([key, item]) => ({key, ...item})), waiting: waiting.size})};
+}
+
+  var resourceNotice;
+  var resourceTransport = createResourceTransport({fetch: fetch.bind(window), notify: function(text) {
+    if (!resourceNotice && text) {
+      resourceNotice = document.createElement('div');
+      resourceNotice.setAttribute('role', 'status');
+      resourceNotice.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);max-width:90vw;padding:10px 14px;border-radius:8px;background:#151515ed;color:white;font:14px sans-serif;z-index:10000;pointer-events:none;text-align:center';
+      document.body.appendChild(resourceNotice);
+    }
+    if (resourceNotice) { resourceNotice.textContent = text; resourceNotice.hidden = !text; }
+  }});
+  window.isaacResourceStats = function() { return resourceTransport.summary(); };
   async function piece1(s, i) {
-    var r = await fetch(name(s, i)), size = chunkLen(s, i);
-    if (!r.ok) {
-      await discard(r);
-      throw new Error('piece ' + s + ':' + i + ': HTTP ' + r.status);
-    }
-    if (!wholeHeader(r, size)) {
-      await discard(r);
-      throw new Error('piece ' + s + ':' + i + ': invalid whole response');
-    }
-    return remember(s + ':' + i, await unpackWhole(s, i, await body(r, s, i, 0, size)));
+    var size = chunkLen(s, i), key = s + ':' + i;
+    var raw = await resourceTransport.readWhole({key: key, url: name(s, i),
+      check: function(r) { return r.ok && wholeHeader(r, size); },
+      read: function(r, progress) { return body(r, s, i, 0, size, progress); }});
+    return remember(key, await unpackWhole(s, i, raw));
   }
   function inWindow(p) {
     var st = S[p.s];
