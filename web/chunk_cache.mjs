@@ -4,13 +4,14 @@ export const CHUNKS = [{"path":"./chunks/a/a0.bin?v=186cb3ec","bytes":4383373,"s
 export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.location?.href,
   cacheStorage=globalThis.caches,request=globalThis.fetch?.bind(globalThis),crypto=globalThis.crypto,
   cacheMs=1500,cacheName='isaac-raw-chunks-v1-d097d9ae',now=()=>performance.now(),
-  retryWait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
+  retryWait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),segmentBytes=1048576}={}) {
+  if(!Number.isSafeInteger(segmentBytes)||segmentBytes<1)throw Error('invalid segment size');
   const canonical=url=>{const u=new URL(url,baseUrl);u.hash='';u.searchParams.delete('w');return u.href;};
   const known=new Map(entries.map(entry=>[canonical(entry.path||entry.url),entry]));
   const blobs=new Map(),loading=new Map();let blobBytes=0;
-  const pendingVerified=new Map(),active=new Map(),controllers=new Set();
+  const pendingVerified=new Map(),pendingSegments=new Map(),active=new Map(),controllers=new Set();
   const rateBuckets=Array.from({length:80},()=>({at:-1,bytes:0}));
-  let firstTransfer=null,stopped=false;
+  let firstTransfer=null,stopped=false,paused=false;
   const memo=(key,blob)=>{if(blobs.has(key)){blobBytes-=blobs.get(key).size;blobs.delete(key);}blobs.set(key,blob);blobBytes+=blob.size;while(blobs.size>2||blobBytes>40*1048576){const first=blobs.keys().next().value;blobBytes-=blobs.get(first).size;blobs.delete(first);}};
   const state={active:false,received:0,total:[...known.values()].reduce((n,e)=>n+e.bytes,0),completed:0,hits:0,misses:0,error:null,downloadedBytes:0};
   const bounded=async(operation,ms)=>{let timer;try{return await Promise.race([Promise.resolve().then(operation),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('chunk cache wait timeout')),ms);})]);}finally{clearTimeout(timer);}};
@@ -57,87 +58,144 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
     bucket.bytes+=bytes;state.downloadedBytes+=bytes;
     if(firstTransfer===null)firstTransfer=time;
   }
-  async function download(key,entry,info) {
+  const partUrl=(file,part)=>{const url=new URL(file.key);url.searchParams.set('__isaac_sha',file.entry.sha256);url.searchParams.set('__isaac_part',part.from+'-'+part.to);return url.href;};
+  const partHeaders=(file,part)=>({'content-length':String(part.length),'x-isaac-sha256':file.entry.sha256,'x-isaac-from':String(part.from),'x-isaac-to':String(part.to),'x-isaac-total':String(file.entry.bytes)});
+  const abortError=()=>{const error=Error('download paused');error.name='AbortError';return error;};
+  async function digest(blob) {
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),byte=>byte.toString(16).padStart(2,'0')).join('');
+  }
+  async function download(file,part,info,probe) {
     for(let attempt=1;attempt<=3;attempt++) {
-      if(stopped)throw Error('download stopped');
-      info.attempt=attempt;info.retrying=attempt>1;
-      let received=0,reader,unlink=()=>{};
+      if(stopped)throw paused?abortError():Error('download stopped');
+      info.attempt=attempt;info.retrying=attempt>1||file.hashFailures>0;
+      let received=0,contribution=0,reader,unlink=()=>{};
       const controller=new AbortController();controllers.add(controller);
-      // Bridge the reader guard's private signal to the group's cancellable request.
       const network=createReaderFetch({fetch:(url,init)=>{
-        const abort=()=>controller.abort();
-        init.signal.addEventListener('abort',abort,{once:true});
+        const abort=()=>controller.abort();init.signal.addEventListener('abort',abort,{once:true});
         unlink=()=>init.signal.removeEventListener('abort',abort);
         return request(url,{...init,signal:controller.signal});
       }});
       try {
-        const response=await network(key);
-        if(stopped){await response.body?.cancel();throw Error('download stopped');}
-        if(response.status!==200||response.headers.get('content-range')){await response.body?.cancel();throw Error('full chunk requires HTTP 200');}
-        const length=response.headers.get('content-length');
-        if(length!==null&&length!==String(entry.bytes)){await response.body?.cancel();throw Error('full chunk header length mismatch');}
-        if(!response.body?.getReader)throw Error('streaming response is required for chunk preload');
-        reader=response.body.getReader();const parts=[];
-        for(;;){const part=await reader.read();if(part.done)break;
-          if(part.value.byteLength){received+=part.value.byteLength;info.received=received;state.received+=part.value.byteLength;transferred(part.value.byteLength);}
-          if(received>entry.bytes)throw Error('full chunk body too large');parts.push(part.value);
+        const url=new URL(file.key);url.searchParams.set('w',part.from+'-'+part.to);
+        const response=await network(url.href,{headers:{Range:'bytes='+part.from+'-'+part.to}});
+        if(stopped){await response.body?.cancel();throw paused?abortError():Error('download stopped');}
+        const whole=response.status===200&&probe;
+        const range='bytes '+part.from+'-'+part.to+'/'+file.entry.bytes;
+        if(!whole&&(response.status!==206||response.headers.get('content-range')?.trim()!==range)){
+          await response.body?.cancel();throw Error('invalid segment Content-Range or HTTP '+response.status);
         }
-        if(received!==entry.bytes)throw Error('full chunk body length mismatch');
+        const size=whole?file.entry.bytes:part.length,length=response.headers.get('content-length');
+        if(whole&&response.headers.get('content-range')){await response.body?.cancel();throw Error('invalid whole Content-Range');}
+        if(length!==null&&length!==String(size)){await response.body?.cancel();throw Error('segment header length mismatch');}
+        if(!response.body?.getReader)throw Error('streaming response is required');
+        reader=response.body.getReader();const parts=[];
+        for(;;){const item=await reader.read();if(item.done)break;
+          if(item.value.byteLength){received+=item.value.byteLength;transferred(item.value.byteLength);
+            const next=whole?Math.max(0,received-file.readyBytes):received;
+            state.received+=next-contribution;contribution=next;info.received=received;}
+          if(received>size)throw Error('segment body too large');parts.push(item.value);
+        }
+        if(received!==size)throw Error('segment body length mismatch');
         const blob=new Blob(parts);
-        const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
-        const sha=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
-        if(sha!==entry.sha256)throw Error('full chunk SHA-256 mismatch');
-        return blob;
+        if(whole&&await digest(blob)!==file.entry.sha256)throw Error('full chunk SHA-256 mismatch');
+        return {blob,whole};
       }catch(error){
-        if(reader)await reader.cancel(error);
-        state.received-=received;info.received=0;
-        if(stopped||attempt===3)throw Error(entry.path+': '+String(error.message||error));
-        info.retrying=true;
-        await retryWait(250*attempt);
+        if(reader)await reader.cancel(error);state.received-=contribution;info.received=0;
+        if(stopped||attempt===3)throw paused?abortError():Error(file.entry.path+': '+String(error.message||error));
+        info.retrying=true;await retryWait(250*attempt);
       }finally{unlink();controller.abort();controllers.delete(controller);reader?.releaseLock?.();}
     }
   }
   let running=null;
+  function pause() {
+    paused=true;stopped=true;for(const controller of controllers)controller.abort();
+    return running?running.catch(()=>undefined).then(()=>summary()):Promise.resolve(summary());
+  }
   function preload() {
     if(running)return running;
     running=(async()=>{
-      state.active=true;state.received=0;state.completed=0;state.error=null;stopped=false;
+      state.active=true;state.received=0;state.completed=0;state.error=null;stopped=false;paused=false;
       firstTransfer=null;for(const bucket of rateBuckets){bucket.at=-1;bucket.bytes=0;}
       try {
         const cache=await bounded(()=>cacheStorage.open(cacheName),cacheMs);
-        const jobs=[...known];let next=0,failure=null;
-        async function worker() {
-          while(!stopped&&next<jobs.length) {
-            const [key,entry]=jobs[next++];
-            try {
-              const existing=await bounded(()=>cache.match(key),cacheMs);
-              if(valid(existing,entry)){pendingVerified.delete(key);state.received+=entry.bytes;state.completed++;continue;}
-              if(stopped)return;
-              const info={file:entry.path,attempt:0,retrying:false,received:0};active.set(key,info);
-              let blob=pendingVerified.get(key);
-              if(blob){state.received+=entry.bytes;info.received=entry.bytes;}
-              else {blob=await download(key,entry,info);pendingVerified.set(key,blob);}
-              // Storage failures never enter the network retry loop. Keep the verified
-              // blob for a user retry, so quota/write errors do not redownload it.
-              try {
-                await bounded(()=>cache.put(key,new Response(blob,{status:200,headers:{'content-length':String(entry.bytes),'x-isaac-sha256':entry.sha256}})),5000);
-              }catch(error){throw Error('chunk cache write failed for '+entry.path+': '+String(error.message||error));}
-              pendingVerified.delete(key);state.completed++;
-            }catch(error){
-              if(!failure)failure=error;
-              stopped=true;for(const controller of controllers)controller.abort();
-            }finally{active.delete(key);}
+        const files=[];
+        for(const [key,entry] of known){
+          if(stopped)throw abortError();
+          if(valid(await bounded(()=>cache.match(key),cacheMs),entry)){pendingVerified.delete(key);state.received+=entry.bytes;state.completed++;continue;}
+          const file={key,entry,parts:[],missing:[],readyBytes:0,whole:false,hashFailures:0};
+          for(let from=0;from<entry.bytes;from+=segmentBytes){const to=Math.min(entry.bytes,from+segmentBytes)-1;file.parts.push({from,to,length:to-from+1});}
+          files.push(file);
+        }
+        if(stopped)throw paused?abortError():Error('download stopped');
+        if(!files.length){state.active=false;return summary();}
+        const partial=await bounded(()=>cacheStorage.open(cacheName+'-segments-v1'),cacheMs);
+        for(const [key,item] of pendingSegments){await bounded(()=>partial.put(key,new Response(item.blob,{status:200,headers:item.headers})),5000);pendingSegments.delete(key);}
+        for(const file of files){
+          if(pendingVerified.has(file.key)){file.readyBytes=file.entry.bytes;state.received+=file.readyBytes;continue;}
+          for(const part of file.parts){
+            if(stopped)throw abortError();
+            const key=partUrl(file,part),response=await bounded(()=>partial.match(key),cacheMs),headers=partHeaders(file,part);
+            const validPart=response?.status===200&&Object.entries(headers).every(([name,value])=>response.headers.get(name)===value);
+            if(validPart&&(await bounded(()=>response.blob(),cacheMs)).size===part.length){file.readyBytes+=part.length;state.received+=part.length;}
+            else {if(response)await bounded(()=>partial.delete(key),cacheMs);file.missing.push(part);}
           }
         }
-        // Both jobs settle (including abort/put cleanup) before the UI can retry.
-        await Promise.all([worker(),worker()]);
-        if(failure)throw failure;
-        state.active=false;
-        return summary();
+        async function clearParts(file){for(const part of file.parts)await bounded(()=>partial.delete(partUrl(file,part)),cacheMs);}
+        async function writeWhole(file,blob){
+          pendingVerified.set(file.key,blob);
+          await bounded(()=>cache.put(file.key,new Response(blob,{status:200,headers:{'content-length':String(file.entry.bytes),'x-isaac-sha256':file.entry.sha256}})),5000);
+          pendingVerified.delete(file.key);file.whole=true;file.readyBytes=file.entry.bytes;state.completed++;
+          await clearParts(file);
+        }
+        for(;;){
+          const jobs=[];for(const file of files)if(!file.whole&&file.missing.length)jobs.push({file,part:file.missing[0],probe:true});
+          let next=0,inFlight=0,failure=null;const wakes=new Set();
+          const wake=()=>{for(const resolve of wakes)resolve();wakes.clear();};
+          async function worker(){
+            while(!stopped){
+              if(next>=jobs.length){if(!inFlight)return;await new Promise(resolve=>wakes.add(resolve));continue;}
+              const job=jobs[next++],{file,part,probe}=job,key=partUrl(file,part);
+              const info={file:file.entry.path,from:part.from,to:part.to,attempt:0,retrying:file.hashFailures>0,received:0};
+              active.set(key,info);inFlight++;
+              try {
+                const result=await download(file,part,info,probe);
+                if(result.whole)await writeWhole(file,result.blob);
+                else {
+                  const item={blob:result.blob,headers:partHeaders(file,part)};pendingSegments.set(key,item);
+                  await bounded(()=>partial.put(key,new Response(item.blob,{status:200,headers:item.headers})),5000);
+                  pendingSegments.delete(key);file.readyBytes+=part.length;
+                  if(probe)for(const rest of file.missing.slice(1))jobs.push({file,part:rest,probe:false});
+                }
+              }catch(error){if(!failure)failure=error;stopped=true;for(const controller of controllers)controller.abort();}
+              finally{active.delete(key);inFlight--;wake();}
+            }
+          }
+          await Promise.all(Array.from({length:4},()=>worker()));
+          if(failure)throw failure;if(stopped)throw abortError();
+          let retry=false;
+          for(const file of files){
+            if(stopped)throw paused?abortError():Error('download stopped');
+            if(file.whole)continue;
+            let blob=pendingVerified.get(file.key);
+            if(!blob){
+              const parts=[];
+              for(const part of file.parts){if(stopped)throw abortError();const response=await bounded(()=>partial.match(partUrl(file,part)),cacheMs);if(!response)throw Error('missing cached segment');const piece=await bounded(()=>response.blob(),cacheMs);if(piece.size!==part.length)throw Error('cached segment body length mismatch');parts.push(piece);}
+              blob=new Blob(parts);
+              if(blob.size!==file.entry.bytes||await digest(blob)!==file.entry.sha256){
+                await clearParts(file);state.received-=file.readyBytes;file.readyBytes=0;file.missing=file.parts;
+                if(++file.hashFailures>=3)throw Error(file.entry.path+': full chunk SHA-256 mismatch');
+                retry=true;continue;
+              }
+            }
+            await writeWhole(file,blob);
+          }
+          if(!retry)break;
+        }
+        if(stopped)throw paused?abortError():Error('download stopped');
+        state.active=false;return summary();
       }catch(error){state.error=String(error.message||error);throw error;}
       finally{state.active=false;running=null;active.clear();}
-    })();
-    return running;
+    })();return running;
   }
   const summary=()=>{
     const time=now(),current=Math.floor(time/250);
@@ -147,9 +205,9 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
     const files=[...active.values()].map(info=>({...info}));
     const selected=files.find(info=>info.retrying)||files[0];
     const etaSeconds=state.completed===known.size?0:bytesPerSecond>0?Math.max(0,state.total-state.received)/bytesPerSecond:null;
-    return {...state,bytesPerSecond,etaSeconds,activeFiles:files.length,files,
+    return {...state,totalFiles:known.size,complete:state.completed===known.size&&!state.active&&!paused&&!stopped&&!state.error,paused,bytesPerSecond,etaSeconds,activeFiles:files.length,networkTasks:files.length,files,
       retrying:files.some(info=>info.retrying),currentFile:selected?.file||null,attempt:selected?.attempt||0,
       memoizedBlobs:blobs.size,memoizedBytes:blobBytes};
   };
-  return {preload,readRange,readWhole,summary,canonical};
+  return {preload,pause,readRange,readWhole,summary,canonical};
 }

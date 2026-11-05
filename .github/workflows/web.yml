@@ -609,7 +609,7 @@ jobs:
               if(await rejected.readRange(url,init)!==null)throw Error('Rejected cache did not bypass');
               const memoryStore=()=>{
                 const records=new Map();
-                const store={match:async key=>records.get(key)?.clone(),put:async(key,response)=>{records.set(key,response.clone());}};
+                const store={match:async key=>records.get(key)?.clone(),put:async(key,response)=>{records.set(key,response.clone());},delete:async key=>records.delete(key)};
                 return {store,api:{open:async()=>store}};
               };
               const immediate=()=>Promise.resolve();
@@ -629,14 +629,14 @@ jobs:
               let live=0,peak=0;const parallelStore=memoryStore();
               const parallel=createVerifiedChunkCache({entries:Array.from({length:4},(_,i)=>({...entry,path:url+'&parallel='+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
                 request:async()=>new Response(new ReadableStream({async start(c){live++;peak=Math.max(peak,live);await new Promise(resolve=>setTimeout(resolve,10));c.enqueue(bytes);live--;c.close();}}))});
-              await parallel.preload();if(peak!==2)throw Error('Expected two concurrent download jobs: '+peak);
+              await parallel.preload();if(peak!==4)throw Error('Expected four concurrent network jobs: '+peak);
               const cancelStore=memoryStore();let groupFetches=0,groupAborted=false;
               cancelStore.store.put=async()=>{throw Error('write fixture');};
               const group=createVerifiedChunkCache({entries:Array.from({length:3},(_,i)=>({...entry,path:url+'&cancel='+i})),cacheStorage:cancelStore.api,baseUrl:location.href,
-                request:async(key,{signal})=>{groupFetches++;if(key.endsWith('cancel=0'))return new Response(bytes);
+                request:async(key,{signal})=>{groupFetches++;if(new URL(key).searchParams.get('cancel')==='0')return new Response(bytes);
                   return new Response(new ReadableStream({start(c){signal.addEventListener('abort',()=>{groupAborted=true;c.error(Error('aborted fixture'));},{once:true});}}));}});
               try{await group.preload();}catch{}
-              if(!groupAborted||groupFetches!==2||group.summary().activeFiles!==0||group.summary().active)throw Error('First failure left a background download or queued another file');
+              if(!groupAborted||groupFetches!==3||group.summary().activeFiles!==0||group.summary().active)throw Error('First failure left a background download or queued another file');
               let offlineFetches=0;const offlineStore=memoryStore();
               const offline=createVerifiedChunkCache({entries:[entry],cacheStorage:offlineStore.api,baseUrl:location.href,retryWait:immediate,request:async()=>{offlineFetches++;throw Error('offline');}});
               try{await offline.preload();}catch{}
@@ -650,7 +650,53 @@ jobs:
               if(rateSample.bytesPerSecond!==4||rateSample.etaSeconds!==1||rateSample.activeFiles!==1)throw Error('Network speed/ETA sample invalid: '+JSON.stringify(rateSample));
               release();await rateDone;await rate.preload();
               if(rate.summary().bytesPerSecond!==0||rate.summary().etaSeconds!==0||rate.summary().downloadedBytes!==8)throw Error('Warm metadata was counted as network transfer');
-              console.log('DOWNLOAD CORE VERIFIED: TWO JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
+              console.log('DOWNLOAD CORE VERIFIED: FOUR JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
+              const resumeName='isaac-cloud-segment-resume',ranges=[];
+              const ranged=(key,init)=>{
+                const range=new Headers(init.headers).get('range');ranges.push(range);
+                const [from,to]=range.slice(6).split('-').map(Number);
+                return new Response(bytes.slice(from,to+1),{status:206,headers:{'content-range':'bytes '+from+'-'+to+'/8','content-length':String(to-from+1)}});
+              };
+              let pendingRange=false;
+              const pausedCache=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,baseUrl:location.href,retryWait:immediate,
+                request:async(key,init)=>{
+                  if(new Headers(init.headers).get('range')==='bytes=0-3')return ranged(key,init);
+                  pendingRange=true;return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('pause fixture')),{once:true}));
+                }});
+              const aborted=pausedCache.preload().then(()=>{throw Error('Paused preload resolved success');},error=>error.name);
+              for(let i=0;i<200&&!pendingRange;i++)await new Promise(resolve=>setTimeout(resolve,1));
+              if(!pendingRange)throw Error('Resume fixture did not reach the second segment');
+              await pausedCache.pause();
+              if(await aborted!=='AbortError'||pausedCache.summary().complete||!pausedCache.summary().paused)throw Error('Pause contract violated');
+              const partial=await caches.open(resumeName+'-segments-v1'),keys=await partial.keys();
+              if(keys.length!==1)throw Error('Completed segment was not durable');
+              const savedKey=keys[0],savedPart=await partial.match(savedKey);
+              const resume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,baseUrl:location.href,request:async(...args)=>ranged(...args)});
+              await resume.preload();
+              if(JSON.stringify(ranges)!==JSON.stringify(['bytes=0-3','bytes=4-7'])||!resume.summary().complete||resume.summary().downloadedBytes!==4)throw Error('Recreated cache redownloaded a completed segment');
+              if((await partial.keys()).length!==0)throw Error('Verified file left its partial segments');
+              const warmResume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,baseUrl:location.href,request:()=>{throw Error('Old whole cache must not fetch segments');}});
+              await warmResume.preload();if(warmResume.summary().downloadedBytes!==0)throw Error('Existing whole cache was not retained');
+              let ignored=0;const ignoredStore=memoryStore();
+              const ignoredRange=createVerifiedChunkCache({entries:[entry],cacheStorage:ignoredStore.api,segmentBytes:2,baseUrl:location.href,request:async()=>{ignored++;return new Response(bytes);}});
+              await ignoredRange.preload();if(ignored!==1)throw Error('Ignored Range downloaded whole file once per segment');
+              const corruptName='isaac-cloud-corrupt-segment',corruptPartial=await caches.open(corruptName+'-segments-v1');
+              await corruptPartial.put(savedKey,new Response(new Uint8Array([9,9,9,9]),{headers:savedPart.headers}));
+              const sentinel=url+'&unrelated=1';await corruptPartial.put(sentinel,new Response('untouched'));
+              let repairRequests=0;
+              const repaired=createVerifiedChunkCache({entries:[entry],cacheName:corruptName,segmentBytes:4,baseUrl:location.href,retryWait:immediate,request:async(...args)=>{repairRequests++;return ranged(...args);}});
+              await repaired.preload();
+              if(repairRequests!==3||!await corruptPartial.match(sentinel)||!repaired.summary().complete)throw Error('Full SHA repair did not isolate the damaged file');
+              const repairedResponse=await repaired.readWhole(url);
+              if(String([...new Uint8Array(await repairedResponse.arrayBuffer())])!==String([...bytes]))throw Error('Wrong full SHA bytes entered whole cache');
+              let finishMatch;const warmPauseStore=memoryStore();
+              warmPauseStore.store.match=()=>new Promise(resolve=>{finishMatch=()=>resolve(new Response(bytes,{headers:{'content-length':'8','x-isaac-sha256':sha}}));});
+              const warmPause=createVerifiedChunkCache({entries:[entry],cacheStorage:warmPauseStore.api,baseUrl:location.href});
+              const warmAborted=warmPause.preload().then(()=>{throw Error('Warm pause resolved success');},error=>error.name);
+              for(let i=0;i<100&&!finishMatch;i++)await new Promise(resolve=>setTimeout(resolve,1));
+              const waitingPause=warmPause.pause();finishMatch();await waitingPause;
+              if(await warmAborted!=='AbortError'||warmPause.summary().complete)throw Error('Last warm metadata pause was ignored');
+              console.log('SEGMENT RESUME VERIFIED: DURABLE PARTS, RECREATE, STRICT 206, 200 ONCE, FULL SHA REPAIR, WARM/PAUSE CONTRACT');
               return {workerBytes:[...new Uint8Array(workerResult.buf)],warm:warm.summary(),inventory:CHUNKS.length};
             },worker);
             assert.equal(requests,8); // cold range, full preload, three short and three hash attempts
@@ -772,6 +818,10 @@ jobs:
           assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
           assert 'window.isaacModCatalogue = null;' in hosted
           assert './web/diagnostics.mjs' in hosted
+          home=Path('dist/index.html').read_text()
+          assert home.index('window.isaacHosted=true') < home.index('bootstrap.js')
+          assert Path('dist/web/home_prepare.mjs').is_file()
+          assert '资源已准备，正在启动游戏' in hosted
           gate=hosted.index("<script>if(new URLSearchParams")
           assert hosted.index('window.__isaacPortableData =') < gate < hosted.index('var P = window.__isaacPortableData')
           assert 'if (P.hostedFullCache) await window.isaacFullCacheReady;' in hosted
@@ -829,7 +879,8 @@ jobs:
               }
               return {cold:first,warm:warm.summary()};
             },cuts);
-            assert.equal(requests,38);
+            const inventory=JSON.parse(fs.readFileSync('dist/inventory.json','utf8'));
+            assert.equal(requests,inventory.reduce((count,entry)=>count+Math.ceil(entry.bytes/1048576),0));
             assert.equal(report.warm.completed,38);
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
