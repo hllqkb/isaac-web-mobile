@@ -3,9 +3,62 @@ on:
   push:
     branches: ['site/mobile-*']
   workflow_dispatch:
+    inputs:
+      apk_url:
+        description: Temporary download URL for the verified Android r2 APK
+        required: false
+        type: string
+      source_url:
+        description: Temporary download URL for the verified Android r2 source ZIP
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
+  stage_android_release:
+    if: github.event_name == 'workflow_dispatch' && inputs.apk_url != '' && inputs.source_url != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Copy verified Android r2 files into the release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test "$(gh release view v2026.11.05-r2 --json isDraft --jq .isDraft)" = true
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from urllib.request import Request, urlopen
+          event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          files=[
+              ('Isaac-Mobile-2026-11-05-r2.apk','apk_url','4bb8a11a92e25aa7efd4e9aa167ed458bcc90e9621b54cdd5c64230492dc1f98'),
+              ('Isaac-Mobile-source-2026-11-05-r2.zip','source_url','713cf3303eda3e7b1f68492f6acca7a83c3964749805ffb3e88c7c37e7aa3f4d'),
+          ]
+          sums=[]
+          for name,key,expected in files:
+              address=event['inputs'][key]
+              print('::add-mask::'+address,flush=True)
+              parsed=urlsplit(address)
+              host=parsed.hostname or ''
+              assert parsed.scheme=='https' and (host.endswith('.githubusercontent.com') or host.endswith('.blob.core.windows.net'))
+              digest=hashlib.sha256()
+              with urlopen(Request(address,headers={'User-Agent':'Isaac-Release-Stager'}),timeout=120) as response,Path(name).open('wb') as output:
+                  while block:=response.read(1024*1024):
+                      output.write(block);digest.update(block)
+              assert digest.hexdigest()==expected,'Release checksum mismatch: '+name
+              sums.append(expected+'  '+name)
+              print('VERIFIED RELEASE FILE',name,Path(name).stat().st_size,expected,flush=True)
+          Path('SHA256SUMS').write_text('\n'.join(sums)+'\n')
+          PY
+          test "$(gh release view v2026.11.05-r2 --json isDraft --jq .isDraft)" = true
+          gh release upload v2026.11.05-r2 --clobber Isaac-Mobile-2026-11-05-r2.apk Isaac-Mobile-source-2026-11-05-r2.zip SHA256SUMS
+          gh api "repos/$GH_REPO/releases" --jq '.[]|select(.tag_name=="v2026.11.05-r2")|{id,tag_name,draft,assets:[.assets[]|{id,name,size,state,digest}]}'
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
