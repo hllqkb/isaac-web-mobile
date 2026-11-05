@@ -234,6 +234,66 @@ jobs:
             await browser.close();
           }
           JS
+      - name: Verify desktop and phone diagnostic reports without touching saves
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import {chromium} from 'playwright';
+          const browser=await chromium.launch({headless:true});
+          try {
+            for(const mobile of [false,true]) {
+              const context=await browser.newContext({viewport:mobile?{width:850,height:390}:{width:1366,height:768},hasTouch:mobile,isMobile:mobile,acceptDownloads:true});
+              const page=await context.newPage(),errors=[];
+              page.on('pageerror',error=>errors.push(error.message));
+              await page.route('**/diagnostics-harness',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><body><main><canvas tabindex="0"></canvas></main><script>
+                window.isaacFrame=20;window.keyboardTrace=[];
+                window.isaacResourceStats=()=>({attempts:2,fallbacks:1,failures:0,timeouts:1,waiting:1,active:[{key:'1:31',received:1024,fallback:true}]});
+                window.isaacSaveStats=()=>({pending:2,inFlight:1,lastError:'fixture: save transaction aborted'});
+                addEventListener('keydown',e=>keyboardTrace.push('down:'+e.key));addEventListener('keyup',e=>keyboardTrace.push('up:'+e.key));
+                </script><script type="module" src="/web/diagnostics.mjs"></script>`}));
+              await page.goto('http://127.0.0.1:8765/diagnostics-harness');
+              await page.waitForFunction(()=>typeof window.isaacDiagnosticReport==='function');
+              const button=page.locator('#isaac-diagnostic-toggle');
+              assert.ok(await page.evaluate(()=>document.querySelector('main').contains(document.querySelector('#isaac-diagnostics'))),'Diagnostic controls disappear outside the game fullscreen target');
+              const box=await button.boundingBox();assert.ok(box.width>=44&&box.height>=44);
+              assert.equal(await page.evaluate(()=>isaacDiagnosticReport().previous),null);
+              await page.locator('canvas').focus();await page.keyboard.down('w');
+              if(mobile)await button.tap();else await button.click();
+              await page.keyboard.up('w');
+              const panel=page.locator('#isaac-diagnostic-panel');assert.ok(await panel.isVisible());
+              assert.ok((await panel.innerText()).includes('游戏正在等待资源读取'));
+              assert.ok((await panel.innerText()).includes('2 个待写'));
+              assert.ok((await panel.innerText()).includes('save transaction aborted'));
+              assert.ok(await page.evaluate(()=>keyboardTrace.includes('up:w')),'Opening diagnostics swallowed a held movement key release');
+              await page.keyboard.press('Enter');
+              assert.ok(!await page.evaluate(()=>keyboardTrace.includes('down:Enter')),'Diagnostics confirmed an in-game action');
+              if(await panel.isHidden())await button.click();
+              await page.evaluate(()=>dispatchEvent(new ErrorEvent('error',{message:'diagnostic fixture <img src=x onerror=alert(1)>'})));
+              assert.ok((await panel.innerText()).includes('diagnostic fixture <img'));
+              const downloadPromise=page.waitForEvent('download');await page.locator('[data-download]').click();
+              const download=await downloadPromise,report=JSON.parse(fs.readFileSync(await download.path(),'utf8'));
+              assert.equal(report.format,'isaac-web-diagnostics/1');assert.equal(report.current.save.pending,2);
+              assert.equal(report.current.resources.waiting,1);assert.ok(report.errors.at(-1).text.includes('<img'));
+              const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('isaac-web-diagnostics-v1')));
+              assert.ok(saved.errors.at(-1).text.includes('diagnostic fixture'));
+              await page.reload();await page.waitForFunction(()=>typeof window.isaacDiagnosticReport==='function');
+              assert.ok(await page.evaluate(()=>isaacDiagnosticReport().previous.errors.at(-1).text.includes('diagnostic fixture')));
+              await button.click();assert.ok(await page.locator('[data-previous]').isEnabled());
+              await page.evaluate(()=>{window.isaacDone='fixture: engine ended';isaacDiagnosticReport();});
+              assert.ok((await panel.innerText()).includes('引擎已结束或报错'));
+              await page.evaluate(()=>{window.isaacDone=null;window.isaacResourceStats=()=>({attempts:0,fallbacks:0,failures:0,timeouts:0,waiting:0,active:[]});});
+              await page.waitForTimeout(5500);
+              await page.evaluate(()=>isaacDiagnosticReport());
+              assert.ok((await panel.innerText()).includes('超过 5 秒未推进'));
+              assert.deepEqual(await page.evaluate(()=>indexedDB.databases()),[]);
+              await page.screenshot({path:'output/'+(mobile?'phone':'desktop')+'-diagnostics.png'});
+              assert.deepEqual(errors,[]);
+              console.log('DIAGNOSTIC UI, INPUT ISOLATION, EXPORT, PREVIOUS SNAPSHOT AND STALL SIGNAL PASSED',mobile?'phone':'desktop');
+              await context.close();
+            }
+          } finally {await browser.close();}
+          JS
       - name: Verify committed page matches the generated page
         run: git diff --exit-code -- game.html
       - uses: actions/upload-artifact@v4
