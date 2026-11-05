@@ -66,11 +66,12 @@ jobs:
             const bytes=await transport.readWhole({key:'0:0',url:primary,check,read:(r,progress)=>readBody(r,0,0,0,4,progress)});
             return {bytes,urls,stats:transport.summary()};
           };
-          for(const kind of ['headers','body','short','invalid']) {
+          for(const kind of ['headers','body','arraybuffer','short','invalid']) {
             const result=await run(async(url,{signal},attempt)=>{
               if(attempt===2)return good();
               if(kind==='headers')return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
               if(kind==='body')return new Response(new ReadableStream({start(c){signal.addEventListener('abort',()=>c.error(Error('aborted')),{once:true});}}));
+              if(kind==='arraybuffer')return {status:200,headers:new Headers(),arrayBuffer:()=>new Promise(()=>{})};
               if(kind==='short')return new Response(new Uint8Array([1,2]));
               return new Response('wrong',{status:503});
             });
@@ -86,6 +87,10 @@ jobs:
           assert.equal(transport.summary().waiting,0);assert.ok(notices.at(-1).includes('读取失败'));
           assert.ok(!fs.readFileSync('web/resource_transport.mjs','utf8').includes('location.reload'));
           console.log('FINAL FAILURE REPORTED WITHOUT RELOAD');
+          const hints=[],visible=createResourceTransport({fetch:async()=>good(),notify:text=>hints.push(text)});
+          const waiting=visible.wait(new Promise(resolve=>setTimeout(()=>resolve(4),850)),'0:0');
+          assert.equal(await waiting,4);assert.ok(hints.some(text=>text.includes('正在读取游戏资源')));assert.equal(hints.at(-1),'');
+          console.log('DEMAND WAIT NOTICE APPEARS AND CLEARS');
           JS
       - name: Prepare cloud browser
         run: |
