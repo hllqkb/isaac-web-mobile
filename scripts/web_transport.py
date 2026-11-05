@@ -69,10 +69,12 @@ def apply_web_transport(page: str, source: Path) -> str:
     if boot.count(anchor) != 1:
         raise ValueError('Reader diagnostic insertion point changed')
     pending = (
-        "window.isaacPendingReadStats=()=>({pendingReads:pendingReads.size,"
+        "window.isaacPendingReadStats=()=>{const windows=[];for(const p of pendingReads.values()){"
+        "windows.push({file:String(p.src).slice(-180),offset:p.off,bytes:p.len,"
+        "ageMs:Math.round(performance.now()-p.t0)});if(windows.length===8)break;}"
+        "return {pendingReads:pendingReads.size,"
         "oldestPendingMs:pendingReads.size?Math.round(performance.now()-pendingReads.values().next().value.t0):0,"
-        "windows:[...pendingReads.values()].slice(0,8).map(p=>({file:String(p.src).slice(-180),"
-        "offset:p.off,bytes:p.len,ageMs:Math.round(performance.now()-p.t0)}))});"
+        "windows};};"
     )
     modules['boot_web.mjs'] = boot.replace(anchor, pending + anchor + '...window.isaacPendingReadStats(),')
     page = page[:registry.start(1)] + json.dumps(modules) + page[registry.end(1):]
