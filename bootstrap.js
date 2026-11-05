@@ -160,7 +160,7 @@ try {
     document.getElementById('mods').append(item);
   }
   const existing = localStorage.getItem(readyKey);
-  progress(existing ? '已找到你的进度，继续时不会重新导入。' : '首次进入会复制初始配置，之后各自独立保存进度。', existing ? 100 : 0);
+  progress(existing ? '已找到存档，可以直接开始。' : '首次开始会下载存档和 mod。', existing ? 100 : 0);
   start.textContent = '开始游戏';
   start.disabled = false;
 } catch (error) {
