@@ -246,7 +246,7 @@ jobs:
               const context=await browser.newContext({viewport:mobile?{width:850,height:390}:{width:1366,height:768},hasTouch:mobile,isMobile:mobile,acceptDownloads:true});
               const page=await context.newPage(),errors=[];
               page.on('pageerror',error=>errors.push(error.message));
-              await page.route('**/diagnostics-harness',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><body><canvas tabindex="0"></canvas><script>
+              await page.route('**/diagnostics-harness',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><body><main><canvas tabindex="0"></canvas></main><script>
                 window.isaacFrame=20;window.keyboardTrace=[];
                 window.isaacResourceStats=()=>({attempts:2,fallbacks:1,failures:0,timeouts:1,waiting:1,active:[{key:'1:31',received:1024,fallback:true}]});
                 window.isaacSaveStats=()=>({pending:2,inFlight:1,lastError:'fixture: save transaction aborted'});
@@ -255,6 +255,7 @@ jobs:
               await page.goto('http://127.0.0.1:8765/diagnostics-harness');
               await page.waitForFunction(()=>typeof window.isaacDiagnosticReport==='function');
               const button=page.locator('#isaac-diagnostic-toggle');
+              assert.ok(await page.evaluate(()=>document.querySelector('main').contains(document.querySelector('#isaac-diagnostics'))),'Diagnostic controls disappear outside the game fullscreen target');
               const box=await button.boundingBox();assert.ok(box.width>=44&&box.height>=44);
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().previous),null);
               await page.locator('canvas').focus();await page.keyboard.down('w');

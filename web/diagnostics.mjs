@@ -35,7 +35,9 @@ root.innerHTML = `<button id="isaac-diagnostic-toggle" type="button" aria-label=
     <p>打开面板不会暂停游戏。报告仅保存在本机，不包含存档和 mod 文件内容。</p>
     <p data-result role="status"></p><textarea aria-label="诊断摘要，可手动复制" readonly hidden></textarea>
   </section>`;
-document.head.append(style); document.body.append(root);
+document.head.append(style);
+// The game fullscreen target is <main>; controls outside it disappear fullscreen.
+(document.querySelector('main') || document.body).append(root);
 const toggle = root.querySelector('#isaac-diagnostic-toggle');
 const panel = root.querySelector('section');
 const result = root.querySelector('[data-result]');
