@@ -100,7 +100,7 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     # The native shell already fills the screen; a redundant HTML fullscreen
     # transition resets touch input during its first gameplay gesture.
     controls = controls.replace('function firstTouch(){',
-                                'function firstTouch(){if(window.isaacNativeShell)return;')
+                                'function firstTouch(){if(window.isaacNativeShell)return;try{if(window.parent!==window&&window.parent.document.fullscreenElement)return;}catch{}')
     if 'mobileButtons.update(mode)' not in controls:
         raise ValueError('Mobile controls update point changed')
     modules['touch_controls.mjs'] = controls
