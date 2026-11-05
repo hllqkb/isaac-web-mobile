@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 680" fill="none">
+  <title>地下室石门</title>
+  <defs>
+    <radialGradient id="light"><stop stop-color="#b6a078" stop-opacity=".2"/><stop offset="1" stop-color="#b6a078" stop-opacity="0"/></radialGradient>
+    <linearGradient id="door" x1="340" y1="180" x2="340" y2="590" gradientUnits="userSpaceOnUse"><stop stop-color="#0e0d0b"/><stop offset="1" stop-color="#25231d"/></linearGradient>
+  </defs>
+  <ellipse cx="340" cy="355" rx="310" ry="300" fill="url(#light)"/>
+  <g stroke="#675e4d" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M43 205 134 202 139 140 222 142M456 140 548 145 549 204 637 207M43 270 117 269M567 270 636 267M45 334 115 337M567 335 636 333M47 403 114 399M568 400 635 404M49 467 114 467M568 468 634 465M55 533 120 534M565 536 631 530" stroke-width="3" opacity=".55"/>
+    <path d="m88 202-3 66m-5 70 3 65m-2 65 5 65m510-326 4 60m-5 69 2 65m-3 67 4 65" stroke-width="2" opacity=".45"/>
+    <path d="M119 584 122 204 169 157 218 110 461 113 511 156 559 205 563 582" stroke-width="13"/>
+    <path d="m139 579-1-366 45-45 43-37 227 1 43 43 43 41 3 367" stroke="#92816a" stroke-width="3"/>
+    <path d="M156 576 156 226 236 150 443 151 519 229 523 578Z" fill="url(#door)" stroke="#352f26" stroke-width="4"/>
+    <path d="m124 280 32-1m-35 91 34-2m-35 96 34 1m-30 78 33-1m367-261 34 3m-32 85 33 1m-31 94 35-1m-32 77 33 1m-327-411 6 21m102-20-1 21m104-18-5 21" stroke="#302a22" stroke-width="4"/>
+    <path d="m99 587 473 1m-496 8 525 1m-482 17 438 1" stroke="#85745c" stroke-width="3"/>
+    <path d="m185 620-34 35m339-34 41 34m-280-37-13 37m181-38 15 39" stroke-width="2" opacity=".45"/>
+  </g>
+  <g stroke="#302b23" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m335 4 1 86" stroke="#7a6c56" stroke-width="3"/>
+    <path d="m319 83 34-1 7 20-45 1Z" fill="#74644d" stroke-width="3"/>
+    <path d="m320 105 1 27q16 19 31-1l1-27" fill="#d2bc88" stroke="#8d7858" stroke-width="3"/>
+    <path d="m328 112 2 12m-22-10-11 3m65-2 13 3m-61 22-9 10m52-10 9 10" stroke="#c1a875" stroke-width="2" opacity=".75"/>
+  </g>
+  <g transform="rotate(-10 116 360)">
+    <path d="m28 286 143 7-3 128-148-9Z" fill="#b7a386" stroke="#2d2720" stroke-width="4"/>
+    <path d="m36 295 128 7-3 109-130-8Z" stroke="#8d795e" stroke-width="1.5"/>
+    <path d="m66 278 26 1 2 22-31-1Z" fill="#d5c7a9" fill-opacity=".45"/>
+    <path d="m65 327 13 3-2 16-13-2 1 10 15 4m13-28 16 2-3 12-15-1 1 13 16 2m12-26 14 3-2 25m-73 18 78 7" stroke="#584834" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m72 392 20 1 9-16 12 18 17 1" stroke="#7d362e" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <ellipse cx="348" cy="581" rx="95" ry="17" fill="#090a08" fill-opacity=".7"/>
+  <g stroke="#7b6b55" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m460 555 13-22 21 3 6 23-22 10Z" fill="#5b5040" stroke-width="3"/>
+    <path d="m474 541 5 1m8 6 5 1m-18 9 8-2" stroke="#a18b6b" stroke-width="4"/>
+    <path d="m202 574 13-14 23 5 5 14-23 5Z" fill="#4a4033" stroke-width="3"/>
+    <path d="m574 486-8 12 5 13-6 14m-502-77 8 11-6 12 7 11" stroke-width="2" opacity=".7"/>
+  </g>
+  <g transform="rotate(12 554 362)" stroke="#7d6a51" stroke-width="3" stroke-linecap="round">
+    <path d="m530 340 37 3m-35 13 28 3m-32 12 39 3m-25 15 11-7 12 2"/>
+    <path d="m541 310 13 3-3 13-13-3Z" stroke="#8c3d32"/>
+  </g>
+  <path d="m276 290 28-7 10 10m64-8 18 8-4 15m-45-35-6 16" stroke="#74644e" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+</svg>
