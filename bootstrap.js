@@ -138,7 +138,50 @@ async function importPreset() {
   progress(homePreparation?'存档和 mod 已准备好。':'配置已保存，正在进入游戏。', 100);
 }
 
+const fullscreenButton=document.getElementById('enter-fullscreen');
+const orientationNote=document.getElementById('orientation-note');
+let fullscreenStarted=false;
+const fullscreenActive=()=>!!(document.fullscreenElement||document.webkitFullscreenElement);
+function updateScreenHelp() {
+  fullscreenButton.hidden=!fullscreenStarted||fullscreenActive();
+  if(innerWidth>=innerHeight)orientationNote.hidden=true;
+}
+function enterFullscreen() {
+  fullscreenStarted=true;
+  // Call synchronously in the click event, before downloads consume user activation.
+  let request;
+  try {
+    const root=document.documentElement;
+    const method=root.requestFullscreen||root.webkitRequestFullscreen;
+    request=fullscreenActive()?Promise.resolve():method?method.call(root):Promise.reject(Error('Fullscreen unavailable'));
+  }catch(error){request=Promise.reject(error);}
+  Promise.resolve(request).then(async()=>{
+    if(matchMedia('(pointer:coarse)').matches){
+      try {
+        if(!screen.orientation?.lock)throw Error('Orientation lock unavailable');
+        await screen.orientation.lock('landscape');orientationNote.hidden=true;
+      }catch{orientationNote.hidden=innerWidth>=innerHeight;}
+    }
+  }).catch(()=>{}).finally(()=>{
+    updateScreenHelp();
+    if(document.body.classList.contains('game-active'))document.getElementById('game-frame').contentWindow?.focus();
+  });
+}
+fullscreenButton.addEventListener('click',enterFullscreen);
+document.addEventListener('fullscreenchange',updateScreenHelp);
+document.addEventListener('webkitfullscreenchange',updateScreenHelp);
+window.addEventListener('resize',updateScreenHelp);
+function showGame(prepared) {
+  const frame=document.getElementById('game-frame');
+  document.getElementById('game-player').hidden=false;
+  document.body.classList.add('game-active');
+  frame.addEventListener('load',()=>frame.contentWindow?.focus(),{once:true});
+  frame.src=prepared?'game.html?prepared=1':'game.html';
+  updateScreenHelp();
+}
+
 start.addEventListener('click', async () => {
+  enterFullscreen();
   start.disabled = true;
   start.textContent = window.isaacHosted===true?'准备中…':'开始游戏';
   start.setAttribute('aria-busy','true');
@@ -160,7 +203,7 @@ start.addEventListener('click', async () => {
     }
     await navigator.locks.request('isaac-shared-import', importPreset);
     if(homePreparation){homePreparation.presetReady();await homePreparation.resources();homePreparation.close();}
-    location.assign(homePreparation?'game.html?prepared=1':'game.html');
+    showGame(!!homePreparation);
   } catch (error) {
     if(homePreparation)homePreparation.stop(error);else progress(error.message || String(error), 0);
     start.disabled = false;
