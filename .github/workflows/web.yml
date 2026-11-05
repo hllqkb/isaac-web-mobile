@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: '22'
       - name: Apply shared patches without downloading game assets
+        id: patch
         run: python3 scripts/patch_game.py
       - name: Verify module syntax, source identity and refresh-independent timing
         run: |
@@ -189,8 +190,10 @@ jobs:
             await browser.close();
           }
           JS
+      - name: Verify committed page matches the generated page
+        run: git diff --exit-code -- game.html
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always() && steps.patch.outcome == 'success'
         with:
           name: Patched-web-game
           path: game.html
