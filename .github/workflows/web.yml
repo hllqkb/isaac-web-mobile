@@ -569,10 +569,11 @@ jobs:
           assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
           assert 'window.isaacModCatalogue = null;' in hosted
           assert './web/diagnostics.mjs' in hosted
-          gate=hosted.index("window.isaacFullCacheReady=import('./web/preload.mjs')")
+          gate=hosted.index("window.isaacFullCacheReady=new Promise")
           assert hosted.index('window.__isaacPortableData =') < gate < hosted.index('var P = window.__isaacPortableData')
           assert 'if (P.hostedFullCache) await window.isaacFullCacheReady;' in hosted
           assert hosted.index('window.isaacFullCacheReady.then(function () {') < hosted.index('document.body.appendChild(s);')
+          assert 'data-cache-reload' in hosted and 'data-cache-online' in hosted
           for name in ['preload.mjs','chunk_cache.mjs','reader_guard.mjs']:
               assert Path('dist/web',name).is_file()
           chunks=json.loads(re.search(r'export const CHUNKS = (\[.*?\]);',Path('web/chunk_cache.mjs').read_text()).group(1))
@@ -629,5 +630,32 @@ jobs:
             assert.equal(report.warm.completed,38);
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
+            const hosted=fs.readFileSync('dist/game.html','utf8');
+            const loader=hosted.match(/<script>(window\.isaacFullCacheReady=new Promise[\s\S]*?)<\/script>/)[1];
+            for(const failure of ['entry','dependency']){
+              const retryPage=await browser.newPage();let entryRequests=0;
+              const fixture='<script>window.__isaacPortableData={hostedFullCache:true};window.__launched=false;</script><script>'+loader+'</script><script>window.isaacFullCacheReady.then(()=>{window.__launched=true;});</script>';
+              await retryPage.route('**/loader-fixture.html',route=>route.fulfill({contentType:'text/html',body:fixture}));
+              if(failure==='entry')await retryPage.route('**/web/preload.mjs',route=>{
+                entryRequests++;
+                return entryRequests===1?route.fulfill({status:404,body:'module unavailable'}):route.fulfill({contentType:'text/javascript',body:'export async function prepareResources(){window.__retried=true;}'});
+              });
+              else await retryPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({status:404,body:'dependency unavailable'}));
+              await retryPage.goto('http://127.0.0.1:8767/loader-fixture.html');
+              await retryPage.locator('[data-preload-loader-error]').waitFor({state:'visible'});
+              assert.equal(await retryPage.evaluate(()=>window.__launched),false);
+              if(failure==='entry'){
+                await Promise.all([retryPage.waitForNavigation(),retryPage.locator('[data-cache-reload]').click()]);
+                await retryPage.waitForFunction(()=>window.__launched===true);
+                assert.equal(entryRequests,2);
+                assert.equal(await retryPage.evaluate(()=>window.__retried),true);
+              }else{
+                await retryPage.locator('[data-cache-online]').click();
+                await retryPage.waitForFunction(()=>window.__launched===true);
+                assert.ok(await retryPage.evaluate(()=>window.isaacFullChunkCache===null&&window.isaacPreloadCompatibility===true&&__isaacPortableData.hostedFullCache===false));
+              }
+              console.log('PRELOAD IMPORT FAILURE RECOVERS BEFORE GAME LAUNCH',failure);
+              await retryPage.close();
+            }
           }finally{await browser.close();}
           JS
