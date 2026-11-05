@@ -12,7 +12,8 @@ from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / 'dist'
-APK_URL = 'https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk'
+# Keep the resource extraction source immutable when publishing newer APKs.
+APK_URL = 'https://github.com/hllqkb/isaac-web-mobile/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk'
 APK_SHA256 = 'd097d9ae686e978aea0c163fd96b3e0bef8f1e0143860e034b2e5b2635f3eebd'
 
 
