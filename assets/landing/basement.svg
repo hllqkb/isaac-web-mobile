@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 680" fill="none">
-  <title>地下室门前的小冒险者</title>
+  <title>地下室石门</title>
   <defs>
     <radialGradient id="light"><stop stop-color="#b6a078" stop-opacity=".2"/><stop offset="1" stop-color="#b6a078" stop-opacity="0"/></radialGradient>
     <linearGradient id="door" x1="340" y1="180" x2="340" y2="590" gradientUnits="userSpaceOnUse"><stop stop-color="#0e0d0b"/><stop offset="1" stop-color="#25231d"/></linearGradient>
@@ -29,18 +29,6 @@
     <path d="m72 392 20 1 9-16 12 18 17 1" stroke="#7d362e" stroke-width="3" stroke-linecap="round"/>
   </g>
   <ellipse cx="348" cy="581" rx="95" ry="17" fill="#090a08" fill-opacity=".7"/>
-  <g stroke="#29241f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M323 472q-20 24-25 67l-3 25q1 13 18 14 14 0 18-11l3-15 1 23q1 16 20 15 19-1 19-16l-1-26 9 18q7 11 20 6 11-5 5-17l-13-37q-8-22-27-39" fill="#cfb69e"/>
-    <path d="M307 495q-22 7-26 26-2 10 8 13 9 1 15-14m83-23q18 8 21 21 4 14-6 17-11 2-17-16" fill="#cfb69e"/>
-    <path d="M271 413c-1-42 31-68 74-69 42-1 81 24 82 68 0 37-27 72-75 74-46 2-80-29-81-73Z" fill="#d8bfa6"/>
-    <path d="M277 420q-13-5-14 7 0 10 13 10m145-17q13-4 14 7-1 12-14 11" fill="#d8bfa6"/>
-    <ellipse cx="310" cy="408" rx="12" ry="17" fill="#29241f" stroke="none"/>
-    <ellipse cx="384" cy="408" rx="12" ry="17" fill="#29241f" stroke="none"/>
-    <path d="m331 451q17-14 34-1" stroke-width="4"/>
-    <path d="m307 427-5 23q1 12 10 10 9-1 7-10l-7-23m67 0-4 22q0 12 9 11 9 0 7-10l-7-23" fill="#8cabb2" stroke="#526d74" stroke-width="2.5"/>
-    <path d="m344 365 4-7" stroke="#a18770" stroke-width="3"/>
-    <path d="m343 521 1 3" stroke="#ab8e76" stroke-width="3"/>
-  </g>
   <g stroke="#7b6b55" stroke-linecap="round" stroke-linejoin="round">
     <path d="m460 555 13-22 21 3 6 23-22 10Z" fill="#5b5040" stroke-width="3"/>
     <path d="m474 541 5 1m8 6 5 1m-18 9 8-2" stroke="#a18b6b" stroke-width="4"/>
