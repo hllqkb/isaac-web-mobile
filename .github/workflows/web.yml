@@ -363,7 +363,7 @@ jobs:
               await page.screenshot({path:'output/landing-'+name+'.png',fullPage:true,animations:'disabled'});
             }
             await page.setViewportSize({width:1366,height:900});
-            await page.locator('#start').click();await page.waitForURL('**/game.html',{timeout:120000});
+            await page.locator('#start').click();await page.frameLocator('#game-frame').getByText('Game navigation reached').waitFor({timeout:120000});
             const counts=await page.evaluate(async()=>{
               async function rows(name,store){const db=await new Promise((r,j)=>{const q=indexedDB.open(name);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});try{return await new Promise((r,j)=>{const q=db.transaction(store).objectStore(store).getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)})}finally{db.close()}}
               const mods=await rows('isaac-mods','mods'),files=await rows('isaac-mods','files'),saves=await rows('isaac-saves','files');
@@ -381,14 +381,26 @@ jobs:
             await page.goto('http://127.0.0.1:8765/');
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
             if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Existing-save CTA label changed');
-            await page.locator('#start').click();await page.waitForURL('**/game.html');
+            await page.locator('#start').click();await page.frameLocator('#game-frame').getByText('Game navigation reached').waitFor();
             const retained=await page.evaluate(async()=>{
               const db=await new Promise(r=>{const q=indexedDB.open('isaac-saves');q.onsuccess=()=>r(q.result)});
               try{return await new Promise(r=>{const q=db.transaction('files').objectStore('files').get('existing-player-progress');q.onsuccess=()=>r(Array.from(q.result.bytes))})}finally{db.close()}
             });
             if(JSON.stringify(retained)!=='[5,11,26]'||presetRequests)throw Error('Existing player data was re-imported');
             console.log('EXISTING PLAYER DATA PRESERVED',retained);
-            await page.addInitScript(()=>{window.isaacHosted=true;});
+            await page.addInitScript(()=>{
+              window.isaacHosted=true;window.__fsCalls=0;window.__fakeFullscreen=false;
+              Object.defineProperty(document,'fullscreenElement',{get:()=>window.__fakeFullscreen?document.documentElement:null});
+              document.documentElement.requestFullscreen=()=>{
+                window.__fsCalls++;window.__fsBeforeImport=!window.__homeCalls;
+                if(!window.__allowFullscreen)return Promise.reject(Error('Fullscreen denied fixture'));
+                window.__fakeFullscreen=true;document.dispatchEvent(new Event('fullscreenchange'));return Promise.resolve();
+              };
+              const media=matchMedia.bind(window);window.matchMedia=query=>{
+                const result=media(query);if(query==='(pointer:coarse)')Object.defineProperty(result,'matches',{value:true});return result;
+              };
+              screen.orientation.lock=async value=>{window.__orientationRequested=value;};
+            });
             await page.route('**/game.html?prepared=1',route=>route.fulfill({contentType:'text/html',body:'<p>Prepared game navigation reached</p>'}));
             await page.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
               export const CHUNKS=[{}];
@@ -405,6 +417,12 @@ jobs:
             await page.locator('#start').click();
             await page.waitForFunction(()=>document.querySelector('#start').textContent==='重试');
             if(!page.url().endsWith('/'))throw Error('Failed preparation navigated to game');
+            if(!await page.evaluate(()=>window.__fsCalls===1&&window.__fsBeforeImport))throw Error('Fullscreen was not requested before asynchronous preparation');
+            await page.locator('#enter-fullscreen').waitFor({state:'visible'});
+            await page.evaluate(()=>{window.__allowFullscreen=true;});
+            await page.locator('#enter-fullscreen').click();
+            await page.waitForFunction(()=>window.__orientationRequested==='landscape'&&document.fullscreenElement===document.documentElement);
+            if(!await page.locator('#enter-fullscreen').isHidden())throw Error('Fullscreen fallback did not clear after success');
             await page.locator('#start').click();
             await page.waitForFunction(()=>typeof window.__finishHome==='function');
             if(!await page.locator('#start').isDisabled())throw Error('Preparation allows duplicate starts');
@@ -422,7 +440,9 @@ jobs:
               await page.screenshot({path:'output/home-prepare-'+name+'.png',fullPage:true,animations:'disabled'});
             }
             if(presetRequests)throw Error('Hosted preparation re-imported existing saves');
-            await page.evaluate(()=>window.__finishHome());await page.waitForURL('**/game.html?prepared=1');
+            await page.evaluate(()=>window.__finishHome());await page.frameLocator('#game-frame').getByText('Prepared game navigation reached').waitFor();
+            if(!page.url().endsWith('/')||await page.locator('#game-frame').getAttribute('allowfullscreen')===null)throw Error('Prepared game left fullscreen parent or denied iframe fullscreen');
+            if(!await page.evaluate(()=>document.fullscreenElement===document.documentElement))throw Error('Game iframe lost the fullscreen parent');
             const hostedRetained=await page.evaluate(async()=>{
               const db=await new Promise(resolve=>{const request=indexedDB.open('isaac-saves');request.onsuccess=()=>resolve(request.result);});
               try{return await new Promise(resolve=>{const request=db.transaction('files').objectStore('files').get('existing-player-progress');request.onsuccess=()=>resolve(Array.from(request.result.bytes));});}finally{db.close();}
