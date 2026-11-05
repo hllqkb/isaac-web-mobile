@@ -3,9 +3,12 @@ import {createMobileConsole, readMobileRunState} from './mobile_console.mjs';
 export function createMobileButtons({root, input, state, resetControls = () => input.reset(), gesture, listen}) {
   const style = document.createElement('style');
   style.textContent = `
-    .mobile-tools {position:fixed;top:28vh;left:max(6px,env(safe-area-inset-left));display:grid;grid-template-columns:repeat(2,44px);gap:6px;width:94px;height:94px;pointer-events:none;z-index:9}
+    .mobile-tools {position:fixed;top:28vh;left:max(6px,env(safe-area-inset-left));display:grid;grid-template-columns:44px;grid-auto-rows:44px;gap:6px;width:44px;pointer-events:none;z-index:9}
     .mobile-tool-backdrop {position:fixed;inset:0;pointer-events:auto;z-index:8}
-    .mobile-tool-options {position:absolute;left:100px;top:0;display:flex;flex-direction:column;gap:4px;pointer-events:none}
+    .mobile-tool-options {position:absolute;left:calc(100% + 6px);top:0;display:flex;flex-direction:column;gap:4px;pointer-events:none}
+    @media (pointer:coarse) and (orientation:landscape) {
+      #stage {max-width:calc(100vw - 100px - 2 * max(6px,env(safe-area-inset-left),env(safe-area-inset-right)))}
+    }
     #touch-controls .mobile-extra {box-sizing:border-box;width:72px;height:48px;min-width:72px;min-height:48px;padding:0 8px;border:1px solid #ffffff33;border-radius:8px;background:rgba(24,24,24,.65);color:#fff;font:500 13px/1.2 system-ui;touch-action:none;user-select:none;pointer-events:auto}
     #touch-controls .mobile-extra.is-down {background:rgba(72,72,72,.85);border-color:#ffffff80}
     #touch-controls .mobile-extra[aria-busy=true] {background:rgba(72,72,72,.85);border-color:#ffffff80}
@@ -100,11 +103,14 @@ export function createMobileButtons({root, input, state, resetControls = () => i
     tools.style.left = 'max(6px,env(safe-area-inset-left))';
     const safeLeft = parseFloat(getComputedStyle(tools).left) || 6;
     const gutter = box.left - safeLeft;
-    const width = tools.offsetWidth;
-    if (gutter >= width + 8) tools.style.left = `${safeLeft + (gutter - width) / 2}px`;
-    tools.style.top = `${Math.max(8, Math.min(box.top + Math.max(56, box.height * 0.28), innerHeight - 110))}px`;
+    const width = tools.offsetWidth, height = tools.offsetHeight;
+    if (gutter >= width + 6) tools.style.left = `${safeLeft + (gutter - width - 6) / 2}px`;
+    const top = gutter < width + 6 && box.top >= height + 16
+      ? (box.top - height) / 2 : box.top + (box.height - height) / 2;
+    tools.style.top = `${Math.max(8, Math.min(top, innerHeight - height - 8))}px`;
   }
   listen(window, 'resize', placeTools);
+  listen(document, 'fullscreenchange', placeTools);
   const menuE = button(root, '表里 E', 'menu-e', (owner, down) => {if (down) input.tap(owner, 'e');});
   menuE.classList.add('mobile-menu-e'); menuE.hidden = true;
   menuE.setAttribute('aria-label', '切换表里角色 E');
