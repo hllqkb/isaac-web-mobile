@@ -176,7 +176,7 @@ jobs:
               if(!bounds||bounds.x<0||bounds.y<0||bounds.x+bounds.width>viewport.width||bounds.y+bounds.height>viewport.height)
                 throw Error('Start button is outside the first viewport: '+JSON.stringify({name,bounds}));
               if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Landing page horizontal overflow: '+name);
-              await page.screenshot({path:'output/landing-'+name+'.png',fullPage:true});
+              await page.screenshot({path:'output/landing-'+name+'.png',fullPage:true,animations:'disabled'});
             }
             await page.setViewportSize({width:1366,height:900});
             await page.locator('#start').click();await page.waitForURL('**/game.html',{timeout:120000});
