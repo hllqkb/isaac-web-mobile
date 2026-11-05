@@ -59,12 +59,19 @@ def apply_web_transport(page: str, source: Path) -> str:
         raise ValueError('Reader guard cannot contain template delimiters or escapes')
     guarded = worker.group(1)
     for old, new in {'await fetch(url, init)': 'await readerFetch(url, init)',
-                     'await fetch(url)': 'await readerFetch(url)'}.items():
+                     'await fetch(url)': 'await readerFetch(url)',
+                     '}).catch(() => {\n    landed();': '}).catch((error) => {\n    landed();',
+                     'buf: null, hit: false, pf: prefetched, ah: ahead':
+                     "buf: null, error: String((error && error.message) || error).slice(0,240), hit: false, pf: prefetched, ah: ahead"}.items():
         if guarded.count(old) != 1:
             raise ValueError(f'Reader fetch insertion point changed: {old}')
         guarded = guarded.replace(old, new)
     guarded = guard + '\nconst readerFetch = createReaderFetch({fetch:fetch.bind(globalThis)});\n' + guarded
     boot = boot[:worker.start(1)] + guarded + boot[worker.end(1):]
+    failure = "failRead(p.src,p.off,p.len,'the reader had no bytes')"
+    if boot.count(failure) != 1:
+        raise ValueError('Reader failure diagnostic insertion point changed')
+    boot = boot.replace(failure, "failRead(p.src,p.off,p.len,d.error||'the reader had no bytes')")
     anchor = 'window.isaacLazyStats=()=>({'
     if boot.count(anchor) != 1:
         raise ValueError('Reader diagnostic insertion point changed')
