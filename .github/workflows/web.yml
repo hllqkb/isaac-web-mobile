@@ -141,6 +141,7 @@ jobs:
             assert.equal(recovered.attempts(),2);
             const failed=await run(hanging);
             assert.equal(failed.message.buf,null);assert.equal(failed.attempts(),4);
+            assert.match(failed.message.error,/reader (headers|body) timeout/);
             assert.equal(failed.messages.filter(message=>message.download).length,0);
             console.log('ACTUAL READER WORKER RECOVERS OR FAILS WITHIN BOUNDS',phase);
           }
