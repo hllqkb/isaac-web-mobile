@@ -72,6 +72,18 @@ jobs:
           }
           console.log('NATIVE GAME SPEED NOT VERIFIED: no Wasm is executed in this synthetic pacer check.');
           console.log('Real speed verification requires wall-clock deltas of present count and NativeGameTick, with native render-gate wait/skip counters.');
+          const touch=modules['touch_controls.mjs'],first=touch.indexOf('function firstTouch(){'),last=touch.indexOf('\nfunction pointerDown(',first);
+          if(first<0||last<0)throw Error('firstTouch extraction failed');
+          const firstTouch=touch.slice(first,last);
+          for(const mode of ['parent-fullscreen','standalone','parent-windowed','cross-origin','native']){
+            let calls=0;const win={};win.parent=mode==='standalone'?win:{document:{fullscreenElement:mode==='parent-fullscreen'?{}:null}};
+            if(mode==='cross-origin')Object.defineProperty(win.parent,'document',{get(){throw Error('cross origin');}});
+            if(mode==='native')win.isaacNativeShell=true;
+            const main={requestFullscreen:()=>{calls++;return Promise.resolve();}};
+            new Function('window','coarse','main','document','let fullscreenTried=false;'+firstTouch+';firstTouch();')(win,{matches:true},main,{fullscreenElement:null});
+            if(calls!==(['parent-fullscreen','native'].includes(mode)?0:1))throw Error('firstTouch fullscreen regression: '+mode);
+          }
+          console.log('FIRST TOUCH RESPECTS PARENT FULLSCREEN; STANDALONE AND CROSS-ORIGIN FALLBACK PRESERVED');
           console.log('PINNED RESOURCE AND MODULE CHECKS PASSED');
           JS
       - name: Verify transport failures, slow streams and immutable fallback
