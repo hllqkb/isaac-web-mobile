@@ -585,3 +585,49 @@ jobs:
           for i in range(7): assert Path(f'dist/preset-{i}.bin').read_bytes()==Path(f'preset-{i}.bin').read_bytes()
           print('SAME-ORIGIN RESOURCE BUNDLE VERIFIED; ENGINE, CLOCK, MOD PRESET AND DIAGNOSTICS PRESERVED')
           PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify complete raw resource cache using the packaged local assets
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+          python3 -m http.server 8767 --bind 127.0.0.1 --directory dist > /tmp/isaac-full-cache-server.log 2>&1 &
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import {chromium} from 'playwright';
+          const browser=await chromium.launch({headless:true});
+          const page=await browser.newPage();
+          let requests=0;
+          page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/chunks/'))requests++;});
+          const cuts=['b14','b20'].map(tag=>({path:'chunks/b/'+tag+'.bin',from:123,take:1024,
+            bytes:[...fs.readFileSync('dist/chunks/b/'+tag+'.bin').subarray(123,1147)]}));
+          try {
+            await page.goto('http://127.0.0.1:8767/web/chunk_cache.mjs');
+            const report=await page.evaluate(async cuts=>{
+              const {createVerifiedChunkCache,CHUNKS}=await import('/web/chunk_cache.mjs');
+              const baseUrl=location.origin+'/';
+              const cold=createVerifiedChunkCache({baseUrl});
+              await cold.preload();
+              const first=cold.summary();
+              if(first.completed!==38||first.received!==391071436||first.memoizedBlobs!==0)throw Error('Complete preload failed: '+JSON.stringify(first));
+              const warm=createVerifiedChunkCache({baseUrl,request:()=>{throw Error('Warm preload made a network request');}});
+              await warm.preload();
+              if(warm.summary().memoizedBlobs!==0)throw Error('Warm startup read whole blobs');
+              for(const cut of cuts){
+                const entry=CHUNKS.find(entry=>entry.path.split('?')[0]==='./'+cut.path);
+                const url=new URL(entry.path,baseUrl).href+'&w='+cut.from+'-'+(cut.from+cut.take-1)+'#ignored';
+                const response=await warm.readRange(url,{headers:{Range:'bytes='+cut.from+'-'+(cut.from+cut.take-1)}});
+                if(response.status!==206||response.headers.get('content-range')!=='bytes '+cut.from+'-'+(cut.from+cut.take-1)+'/'+entry.bytes)throw Error('Warm full-bundle range headers wrong');
+                const bytes=[...new Uint8Array(await response.arrayBuffer())];
+                if(JSON.stringify(bytes)!==JSON.stringify(cut.bytes))throw Error('Warm full-bundle range differs from packaged bytes');
+              }
+              return {cold:first,warm:warm.summary()};
+            },cuts);
+            assert.equal(requests,38);
+            assert.equal(report.warm.completed,38);
+            assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
+            console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
+          }finally{await browser.close();}
+          JS
