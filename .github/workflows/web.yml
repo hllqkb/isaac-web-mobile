@@ -275,6 +275,18 @@ jobs:
             await page.goto('http://127.0.0.1:8765/');
             await page.locator('#start').waitFor({state:'visible'});
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            for (const [name, viewport] of [['desktop',{width:1366,height:900}],['phone-portrait',{width:390,height:844}],['phone-landscape',{width:850,height:390}]]) {
+              await page.setViewportSize(viewport);
+              await page.evaluate(async()=>{await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode()));});
+              await page.waitForFunction(()=>[...document.querySelectorAll('.scene,.sheet')].every(element=>getComputedStyle(element).opacity==='1'));
+              if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Landing CTA label changed');
+              const bounds=await page.locator('#start').boundingBox();
+              if(!bounds||bounds.x<0||bounds.y<0||bounds.x+bounds.width>viewport.width||bounds.y+bounds.height>viewport.height)
+                throw Error('Start button is outside the first viewport: '+JSON.stringify({name,bounds}));
+              if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Landing page horizontal overflow: '+name);
+              await page.screenshot({path:'output/landing-'+name+'.png',fullPage:true,animations:'disabled'});
+            }
+            await page.setViewportSize({width:1366,height:900});
             await page.locator('#start').click();await page.waitForURL('**/game.html',{timeout:120000});
             const counts=await page.evaluate(async()=>{
               async function rows(name,store){const db=await new Promise((r,j)=>{const q=indexedDB.open(name);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});try{return await new Promise((r,j)=>{const q=db.transaction(store).objectStore(store).getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)})}finally{db.close()}}
@@ -292,6 +304,7 @@ jobs:
             page.on('request',request=>{if(/preset-\d+\.bin/.test(request.url()))presetRequests++;});
             await page.goto('http://127.0.0.1:8765/');
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            if(await page.locator('#start').innerText()!=='开始游戏')throw Error('Existing-save CTA label changed');
             await page.locator('#start').click();await page.waitForURL('**/game.html');
             const retained=await page.evaluate(async()=>{
               const db=await new Promise(r=>{const q=indexedDB.open('isaac-saves');q.onsuccess=()=>r(q.result)});
