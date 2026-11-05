@@ -218,6 +218,7 @@ jobs:
                 urls[name]=URL.createObjectURL(new Blob([text],{type:'text/javascript'}));
               }
               const {createTouchControls}=await import(urls['touch_controls.mjs']);
+              window.createButtonFixture=(await import(urls['mobile_buttons.mjs'])).createMobileButtons;
               window.controlTrace=[];
               window.controlState={ready:true,running:false,paused:false,blocked:false,menu:5,frame:0};
               window.controls=createTouchControls({readState:()=>({...controlState,frame:Math.floor(performance.now()/16)}),
@@ -265,6 +266,64 @@ jobs:
               await page.locator('[data-mobile-action="menu-e"]').tap();
               await page.waitForFunction(()=>controlTrace.filter(e=>e.key==='e').length===2);
               console.log('PHONE E TOUCH',await page.evaluate(()=>controlTrace));
+              await page.evaluate(async()=>{
+                const fixture=document.createElement('div');document.body.append(fixture);
+                const trace=[],current={ready:true,running:true,paused:false,blocked:false,menu:0,frame:1};
+                let frame=1;
+                const memory=new Map([[0xc71678,100],[0xc7169c,200],[100+0x264f8,1],[100+0x18300,300],
+                  [100+0x1baa8,400],[100+0x1baac,404],[300+12,10],[300+16,10],[400,500],[500+0x28,1]]);
+                const previousGuest=window.isaacGuest,previousInject=window.isaacInjectKey;
+                window.isaacGuest={u32:address=>address===100+0x264f8?frame:(memory.get(address)||0),u8:()=>0};
+                window.isaacInjectKey=(key,down)=>trace.push({key,down});
+                const controls=createButtonFixture({root:fixture,state:()=>current,input:{tap:(_owner,key)=>trace.push({key,down:true}),reset(){}},
+                  gesture(){},listen:(target,type,handler)=>target.addEventListener(type,handler)});
+                controls.update('game');
+                const buttons=[...fixture.querySelectorAll('.mobile-tools > button')];
+                const [enter,swap,drop,tools]=buttons;
+                const assert=(ok,message)=>{if(!ok)throw Error(message+' '+JSON.stringify(trace));};
+                const send=(el,type,id=41,dx=0,dy=0,extra={})=>{
+                  const box=el.getBoundingClientRect();
+                  el.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:id,pointerType:'touch',
+                    clientX:box.left+box.width/2+dx,clientY:box.top+box.height/2+dy,button:0,...extra}));
+                };
+                const tap=(el,id=41)=>{send(el,'pointerdown',id);send(el,'pointerup',id);};
+                try {
+                  for(const [el,key] of [[enter,'enter'],[swap,'ctrl']]) {
+                    trace.length=0;send(el,'pointerdown');assert(!trace.length,'Down injected '+key);
+                    send(el,'pointerup');assert(trace.length===1&&trace[0].key===key,'Up did not trigger once');
+                    el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1}));assert(trace.length===1,'Pointer click duplicated');
+                    trace.length=0;
+                    for(const kind of ['move','outside-back','cancel','lost','leave','blur','hidden','disabled','state']) {
+                      send(el,'pointerdown');
+                      if(kind==='move')send(el,'pointermove',41,12);
+                      if(kind==='outside-back'){send(el,'pointermove',41,80);send(el,'pointermove');}
+                      if(kind==='cancel')send(el,'pointercancel');
+                      if(kind==='lost')send(el,'lostpointercapture');
+                      if(kind==='leave')send(el,'pointerleave');
+                      if(kind==='blur')dispatchEvent(new Event('blur'));
+                      if(kind==='hidden'){Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));delete document.hidden;}
+                      if(kind==='disabled'){el.disabled=true;await Promise.resolve();el.disabled=false;await Promise.resolve();}
+                      if(kind==='state'){current.paused=true;controls.update('game');current.paused=false;controls.update('game');}
+                      send(el,'pointerup');assert(!trace.length,'Cancelled tap executed '+kind);
+                    }
+                    send(el,'pointerdown');await new Promise(resolve=>setTimeout(resolve,700));send(el,'pointerup');assert(!trace.length,'Long hold executed');
+                  }
+                  trace.length=0;send(enter,'pointerdown',51);send(swap,'pointerdown',52);send(enter,'pointerup',51);send(swap,'pointerup',52);
+                  assert(!trace.length,'Conflicting tool fingers executed');
+                  // A non-primary tool pointer is valid while another finger owns a joystick.
+                  send(enter,'pointerdown',61,0,0,{isPrimary:false});send(enter,'pointerup',61,0,0,{isPrimary:false});
+                  assert(trace.length===1,'Joystick finger blocked a valid tool tap');
+                  trace.length=0;enter.click();assert(trace.length===1,'Assistive click failed');
+                  trace.length=0;send(drop,'pointerdown');assert(!trace.length,'Drop began on down');send(drop,'pointerup');
+                  assert(trace.length===1&&trace[0].key==='ctrl'&&trace[0].down,'Drop tap did not start native hold');
+                  frame+=95;controls.update('game');assert(trace.length===1,'Drop released before 96 native frames');
+                  frame++;controls.update('game');assert(trace.length===2&&!trace[1].down,'Drop hold did not release at 96 native frames');
+                  const initial=tools.getAttribute('aria-expanded');send(tools,'pointerdown');assert(tools.getAttribute('aria-expanded')===initial,'Tools opened on down');
+                  send(tools,'pointerup');assert(tools.getAttribute('aria-expanded')==='true','Tools did not open on completed tap');
+                  console.log('FOUR RAIL BUTTONS: TAP COMMIT, CANCELLATION, MULTITOUCH AND 96-FRAME DROP VERIFIED');
+                } finally {fixture.remove();window.isaacGuest=previousGuest;window.isaacInjectKey=previousInject;}
+              });
+
             } else {
               if(!await page.locator('#touch-controls').isHidden())throw Error('Desktop has a touch overlay');
               await page.locator('#canvas').focus();

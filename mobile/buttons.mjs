@@ -42,31 +42,78 @@ export function createMobileButtons({root, input, state, resetControls = () => i
   root.append(style, backdrop, tools, panel); panel.append(fps);
   const terminal = createMobileConsole({root,state,gesture,resetControls,listen});
   let dropHold = null;
-  const button = (parent, label, id, binding) => {
+  const tapGestures = new Set();
+  const cancelTaps = () => {for (const cancel of [...tapGestures]) cancel();};
+  const tapContext = () => {
+    const value = state();
+    return [value.ready,value.blocked,value.running,value.paused,value.menu,value.cinematic,
+      value.transit,value.cutscene,window.isaacDone,!!window.isaacMobileConsoleActive?.()].join(':');
+  };
+  listen(window, 'blur', cancelTaps);
+  listen(document, 'visibilitychange', () => {if (document.hidden) cancelTaps();});
+  const button = (parent, label, id, binding, tap = false) => {
     const el = document.createElement('button'); el.type = 'button'; el.textContent = label;
     el.className = 'mobile-extra'; el.dataset.mobileAction = id;
     const owner = `mobile:${id}`;
-    listen(el, 'pointerdown', event => {
-      event.preventDefault(); event.stopPropagation();
-      if (el.disabled || !state().ready || state().blocked) return;
-      gesture(); el.setPointerCapture(event.pointerId); el.classList.add('is-down');
-      binding(owner, true);
-    });
-    const release = event => {
-      event.preventDefault(); event.stopPropagation();
-      if (!el.classList.contains('is-down')) return;
-      el.classList.remove('is-down'); binding(owner, false);
-    };
-    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(el, type, release);
-    listen(el, 'pointermove', event => {event.preventDefault(); event.stopPropagation();});
-    listen(el, 'click', event => {event.preventDefault(); event.stopPropagation();});
+    if (tap) {
+      let pending = null;
+      const cancel = () => {pending = null; el.classList.remove('is-down'); tapGestures.delete(cancel);};
+      const inside = event => {
+        const box = el.getBoundingClientRect();
+        return event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+      };
+      const available = () => !el.disabled && !el.hidden && !tools.hidden && state().ready && !state().blocked && !document.hidden;
+      const stop = event => {event.preventDefault(); event.stopPropagation();};
+      listen(el, 'pointerdown', event => {
+        stop(event);
+        if (tapGestures.size) {cancelTaps(); return;}
+        if (!available() || event.button !== 0 || !inside(event)) return;
+        pending = {id:event.pointerId,x:event.clientX,y:event.clientY,time:performance.now(),context:tapContext()};
+        tapGestures.add(cancel); el.classList.add('is-down');
+        try {el.setPointerCapture(event.pointerId);} catch {}
+      });
+      listen(el, 'pointermove', event => {
+        stop(event);
+        if (pending?.id === event.pointerId && (!inside(event) || Math.hypot(event.clientX-pending.x,event.clientY-pending.y)>10)) cancel();
+      });
+      listen(el, 'pointerup', event => {
+        stop(event);
+        if (pending?.id !== event.pointerId) return;
+        const valid = available() && inside(event) && Math.hypot(event.clientX-pending.x,event.clientY-pending.y)<=10 &&
+          performance.now()-pending.time<=650 && pending.context===tapContext();
+        cancel();
+        if (valid) {gesture(); binding(owner,true); binding(owner,false);}
+      });
+      for (const type of ['pointercancel','lostpointercapture','pointerleave']) listen(el,type,event=>{
+        stop(event); if (pending?.id===event.pointerId) cancel();
+      });
+      // Keyboard and assistive activation emit a zero-detail click; pointer clicks were handled above.
+      listen(el,'click',event=>{stop(event);if(event.detail===0 && available() && !tapGestures.size){gesture();binding(owner,true);binding(owner,false);}});
+      new MutationObserver(() => cancel())
+        .observe(el,{attributes:true,attributeFilter:['disabled','hidden']});
+    } else {
+      listen(el, 'pointerdown', event => {
+        event.preventDefault(); event.stopPropagation();
+        if (el.disabled || !state().ready || state().blocked) return;
+        gesture(); el.setPointerCapture(event.pointerId); el.classList.add('is-down');
+        binding(owner, true);
+      });
+      const release = event => {
+        event.preventDefault(); event.stopPropagation();
+        if (!el.classList.contains('is-down')) return;
+        el.classList.remove('is-down'); binding(owner, false);
+      };
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(el, type, release);
+      listen(el, 'pointermove', event => {event.preventDefault(); event.stopPropagation();});
+      listen(el, 'click', event => {event.preventDefault(); event.stopPropagation();});
+    }
     parent.append(el); return el;
   };
-  button(tools, 'Enter', 'enter', (owner, down) => {if (down) {releaseDrop(); input.tap(owner, 'enter');}})
+  button(tools, 'Enter', 'enter', (owner, down) => {if (down) {releaseDrop(); input.tap(owner, 'enter');}}, true)
     .setAttribute('aria-label', '回车 Enter，跳过过场');
-  const swap = button(tools, 'Ctrl', 'swap', (owner, down) => {if (down && !dropHold) input.tap(owner, 'ctrl');});
+  const swap = button(tools, 'Ctrl', 'swap', (owner, down) => {if (down && !dropHold) input.tap(owner, 'ctrl');}, true);
   swap.setAttribute('aria-label', '切换 Ctrl');
-  const drop = button(tools, '丢弃', 'drop', (_owner, down) => {if (down) startDrop();});
+  const drop = button(tools, '丢弃', 'drop', (_owner, down) => {if (down) startDrop();}, true);
   drop.setAttribute('aria-label', '长按 Ctrl 丢弃饰品和卡牌');
   drop.setAttribute('aria-busy', 'false');
   function releaseDrop() {
@@ -85,7 +132,7 @@ export function createMobileButtons({root, input, state, resetControls = () => i
   }
   listen(document, 'visibilitychange', () => {if (document.hidden) releaseDrop();});
   listen(window, 'blur', releaseDrop);
-  const toggle = button(tools, '工具', 'tools', (_owner, down) => {if (down) expandTools(toolOptions.hidden);});
+  const toggle = button(tools, '工具', 'tools', (_owner, down) => {if (down) expandTools(toolOptions.hidden);}, true);
   toggle.classList.add('mobile-tool-toggle'); toggle.setAttribute('aria-expanded', 'false');
   toggle.setAttribute('aria-controls', toolOptions.id); tools.append(toolOptions);
   function expandTools(expanded) {
@@ -170,7 +217,7 @@ export function createMobileButtons({root, input, state, resetControls = () => i
     swap.disabled = !canDrop || !!dropHold;
     drop.disabled = !canDrop || !!dropHold;
     const toolsContext = `${showTools}:${!!current.paused}:${mode}:${skipping}:${dead}`;
-    if (toolsContext !== lastToolsContext) {expandTools(false); lastToolsContext = toolsContext;}
+    if (toolsContext !== lastToolsContext) {cancelTaps(); expandTools(false); lastToolsContext = toolsContext;}
     rewind.hidden = !!current.paused && !dead;
     rewind.disabled = consoleButton.disabled = !canConsole;
     saveExit.hidden = !current.running || dead || !showTools;
