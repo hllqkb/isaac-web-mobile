@@ -1,95 +1,77 @@
-# 以撒的结合 网页版 · 全成就 + mod 配置分享包
+# 以撒网页版与 Android 离线版
 
-## 这是什么
-在网页版以撒（https://chiikabu.github.io/the-browsing-of-isaac/）里，一次性装好：
-  - 3 个全成就存档：成就 641/641、角色全开、挑战全开、
-    Eden 代币 99999、捐款机和贪婪捐款机各 888
-  - 游戏设置：已开启控制台（按 ` 键，英文输入法下按住半秒）；
-    渲染倍数 1（更流畅，画面略糊）；关闭了游戏自带的英文道具说明框，改看 EID 的中文
-  - 35 个 mod（清单见最后），按网页版的性能挑过
-  - EID 道具说明：简体中文，并做了降耗（刷新率 10、战斗中自动隐藏）
-  - GoodTrip（Tab+鼠标点小地图传送）已按 HUD 偏移校准，点得准
+基于 [The Browsing of Isaac](https://github.com/chiikabu/the-browsing-of-isaac) 的个人配置版：预置我的 Chrome 存档和 mod，加入手机横屏触控、帧率节奏控制、资源缓存与存档写入保护。
 
-注意：导入会覆盖你浏览器里原有的以撒存档，并清掉未打完的对局。
-网页版运行的是游戏原版内容，建议自己也拥有正版《以撒的结合：忏悔》。
+[打开网页版](https://hllqkb.github.io/isaac-web-setup/) · [下载 Android APK](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) · [版本与源码](https://github.com/hllqkb/isaac-web-setup/releases/tag/v2026.11.05)
 
+更新日期：2026-11-05。初始存档快照：2026-11-04。
 
-## 方式一：一键脚本（推荐）
-1. 用 Chrome 或 Edge 打开这个地址（是一张小图标，不是游戏页面）：
-     https://chiikabu.github.io/the-browsing-of-isaac/favicon-32.png
-   同时确认没有开着任何以撒游戏页面。
-2. 按 F12（Mac 是 Option+Command+J）打开开发者工具，切到「Console / 控制台」。
-3. 打开本仓库的 [isaac-setup.js](isaac-setup.js)（点右上角 Raw 再全选复制），全选复制，粘贴到控制台，回车。
-   - Chrome 第一次粘贴会提示不允许粘贴，按提示输入 allow pasting 回车后再粘贴。
-   - 这是正常的安全提醒：只运行你信任的人给的代码。脚本是明文，可以先看看内容。
-4. 弹窗点「确定」，等它跑完（要下载 mod，约 1-2 分钟），最后会弹出「完成」。
-   已经跑过旧版脚本的人也可以再跑一次：装过的 mod 会跳过，
-   并会关掉这版不再推荐的 mod、补上修补和新设置。
-5. 打开 https://chiikabu.github.io/the-browsing-of-isaac/?touch=0 开始玩
-   （?touch=0 防止网页误判成手机、出现虚拟摇杆）。
+## 游戏截图
 
+角色选择与预设完成标记：
 
-## 方式二：手动导入（不想粘代码时）
-1. 打开 https://chiikabu.github.io/the-browsing-of-isaac/?saves=1
-2. 右上角点 Saves → Import…，选 [isaac-saves-backup.zip](isaac-saves-backup.zip)，再点 Reload to apply。
-3. 进游戏后，在主菜单 MODS → MOD BROWSER（按 B），按下面的清单逐个搜索安装。
-4. 这种方式 EID 是英文、GoodTrip 点小地图会偏。建议用方式一。
+![网页端角色选择](assets/screenshots/character-select.png)
 
+电脑浏览器游戏画面：
 
-## Mac 用户可选：Command 和 Control 互换
-如果你在系统里把 Command/Control 互换了，想让游戏里也跟着换：
-装 Tampermonkey 扩展（Chrome 里要打开扩展详情里的「允许用户脚本」），
-新建脚本，粘贴 [isaac-swap-cmd-ctrl.user.js](isaac-swap-cmd-ctrl.user.js) 的内容（或者直接点开它的 Raw 链接，Tampermonkey 会弹出安装页）保存即可。
+![电脑端游戏画面](assets/screenshots/desktop-gameplay.png)
 
+手机横屏触控布局，左侧保留 Enter、Ctrl、丢弃和可展开的工具按钮。下图来自触控模式的云端实际游戏验证，不是手机实拍；截图 FPS 不代表手机性能。
 
-## 常见问题
-- 导入后没生效：多半是导入时游戏页面还开着，退出时把旧存档写回去了。
-  关掉所有游戏页面，重新导入一次。
-- 进游戏一开始就崩、报 _invalid_parameter：某个存档位里有「mod 组合不一样」的
-  未打完对局。重新跑一次方式一的脚本会自动清掉。
-- 水层/矿层秘密出口崩溃：是 Angels Drop Items 这个 mod 的 bug，本包已不再安装它；
-  旧版装过的，脚本会把它关掉并修补。
-- 走不动：多半是中文输入法吃掉了 WASD，切到英文输入法。
-- 掉帧：火堆、水面多的房间是网页版模拟光照的开销，把浏览器窗口缩小一点（不全屏）有帮助；
-  按 F2 可临时隐藏 EID。游戏本身上限 60 帧（逻辑每秒 30 次），显示 60 就是满帧。
+![手机横屏触控布局](assets/screenshots/mobile-landscape.png)
 
+## 网页与 APK
 
-## mod 清单（35 个）
-  - Door Overhaul
-  - Better Wizoobs!
-  - Visible Options!
-  - Cooler Completion Marks [REP+]
-  - Deal Visual Change
-  - drop trinkets faster
-  - Enhanced Boss Bars
-  - External item descriptions
-  - GoodTrip
-  - Hush Now Drops Eden's Blessing
-  - Instant Fires and Poops
-  - Instant Restart
-  - [REP(+)] Laser Ludovico Fix
-  - No Jam
-  - No More Hidden Enemies
-  - NO CURSES
-  - No Empty Pedestals
-  - Planetarium Chance [REP+]
-  - pog for good pills
-  - POG for Good Items
-  - "?" Marked Tinted Rocks
-  - Range fix for Bag of Crafting
-  - Range fix for Bones & Sword
-  - Rare Secret Rooms
-  - (REP) Faster Animations
-  - (REP) Improved Chargebar
-  - Simple FPS Counter
-  - Spindown Dice Preview (Reupload)
-  - Stats+
-  - There's No Rush
-  - TimeMachine
-  - cry
-  - unintrusive pause menu
-  - Unique Coins
-  - Visible Challenge Unlocks
+| | 网页版 | Android 离线版 |
+| --- | --- | --- |
+| 入口 | [开始游戏](https://hllqkb.github.io/isaac-web-setup/) | [下载 APK，约 624 MB](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) |
+| 运行环境 | 已验证桌面 Chrome；手机自动启用触控布局 | Android 10 及以上，arm64-v8a |
+| 游戏资源 | 首次联网加载，后续利用浏览器缓存 | 安装包内置资源与独立 Chromium 内核，可离线玩 |
+| 存档 | 保存在当前浏览器、当前网站的本地数据中 | 保存在当前应用数据中 |
+| 源码 | 本仓库的网页与共享模块 | [对应版本完整源码 ZIP](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-source-2026-11-05.zip) |
 
----
-本仓库不包含任何游戏程序或素材，只有存档、设置和配置脚本。mod 由网页版自己的 mod 库下载。
+第一次从网页首页进入时，会导入约 25 MB 的初始配置。现有存档不会被正常启动流程自动覆盖；每个人之后各自游玩，进度互不影响。网页和 APK 的存档分别存储，不会自动同步。清除网站数据或卸载应用会删除对应的本地进度。
+
+## 这个版本做了什么
+
+- 预置 3 个存档位、41 个已安装 mod，其中 35 个启用，包含中文 EID 道具说明。完整名单见 [preset-info.json](preset-info.json)。
+- 手机使用原生触控区域移动和射击；修正滑动方向、菜单滑动与边缘瞄准，补齐确认、物品切换、丢弃和工具入口。电脑保留键盘操作。
+- 游戏更新节奏与屏幕刷新率解耦，避免高刷新率屏幕让游戏变快。实际流畅度仍取决于设备、mod 和房间内容。
+- 缓存解码后的音频资源；网页资源等待时显示提示，下载停滞时使用备用地址重试。首次加载、缓存失效和引擎初始化仍需要时间，不能完全跳过 0–100 加载。
+- 存档写入等到 IndexedDB 事务提交成功后才确认，失败会重试；工具中的“保存退出”走游戏原生保存流程。
+- APK 第一次按系统返回时暂停并提示，再按一次离开。系统仍保留应用进程时，再点图标可返回原画面；进程被系统回收后需要重新加载。
+
+## 操作
+
+| 动作 | 电脑键盘 | 手机 |
+| --- | --- | --- |
+| 移动 / 射击 | WASD / 方向键 | 左侧移动 / 右侧射击触控区 |
+| 确认 / 跳过可跳过的过场 | Enter | 左侧 Enter |
+| 主动道具 | Space | 点击游戏内道具区域 |
+| 炸弹 | E | 点击游戏内炸弹区域 |
+| 卡牌 / 药丸 | Q | 点击游戏内卡牌或药丸区域 |
+| 切换物品 / 双角色相关操作 | Ctrl，具体行为由角色决定 | 左侧 Ctrl |
+| 丢弃饰品 / 卡牌 / 药丸 | 长按 Ctrl | 点击左侧“丢弃”，自动保持按键约 3 秒 |
+| 地图 / 暂停 | Tab / Esc | 游戏内地图 / 暂停按钮 |
+| 回到上一间房 / 游戏终端 | 使用游戏终端 | 展开“工具”，选择 rewind 或终端 |
+
+选人界面的 E 操作会按界面状态提供。工具还包含保存退出和性能诊断；死亡结算画面仍可尝试 rewind，但引擎已经崩溃或本局不可回溯时无法恢复。
+
+## 进度与已知限制
+
+存档保护用于减少写入失败导致的数据丢失，**不等于每个房间自动保存**。正常离开前建议使用“工具 → 保存退出”。崩溃后只能恢复到游戏最近实际生成并成功写入的存档点，不能保证回到崩溃前的房间。曾出现的偶发隐藏房崩溃尚未确认根因，不宣称已经消除所有崩溃。
+
+当前网页验证已通过资源超时与备用地址、缓存、帧率节奏、手机按键、首次导入及已有存档保护等 CI 检查。APK 已通过构建、签名、离线资源校验及真实引擎场景检查；最新 APK 尚待更多设备实测。
+
+## 项目内容与来源
+
+- `game.html`：生成后的游戏页面；`upstream/game.html`：上游页面快照。
+- `mobile/`：网页与 APK 共用的触控、节奏、缓存和恢复模块。
+- `web/`、`scripts/`：网页资源传输及页面补丁。
+- `bootstrap.js`、`preset-*.bin`、`preset-info.json`：首次配置导入与快照信息。
+- `assets/screenshots/`：本 README 使用的真实游戏截图。
+- Releases：已签名 APK 和对应 Android 源码；大文件不放进 Git 历史。
+
+仓库中的旧 `isaac-setup.js` 与备份文件仅保留作历史配置，通常不需要执行；旧导入脚本可能覆盖当前进度。
+
+感谢 [chiikabu 的网页移植项目](https://github.com/chiikabu/the-browsing-of-isaac) 和各 mod 作者。项目代码遵循 [GPL-3.0](LICENSE)，上游及第三方组件保留各自许可。The Binding of Isaac 的游戏内容和商标归 Nicalis, Inc.、Edmund McMillen 及相关权利人所有；本项目与其无官方关联。请支持正版。

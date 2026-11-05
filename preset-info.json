@@ -1,0 +1,213 @@
+{
+  "format": "isaac-shared-preset/1",
+  "exported_at": "2026-11-04T03:59:13.326077+00:00",
+  "saves": 33,
+  "mods": 41,
+  "enabled_mods": 35,
+  "mod_files": 1388,
+  "bytes": 25266859,
+  "sha256": "b68b0d74eae7b689a923d7eb1e4c1098b49c1a2f8c45454a43cb2b6838b3344f",
+  "mod_names": [
+    {
+      "name": "Door Overhaul",
+      "enabled": true
+    },
+    {
+      "name": "Angels Drop Items",
+      "enabled": false
+    },
+    {
+      "name": "AntiCrash - less crashes!",
+      "enabled": false
+    },
+    {
+      "name": "Better Wizoobs!",
+      "enabled": true
+    },
+    {
+      "name": "Visible Options!",
+      "enabled": true
+    },
+    {
+      "name": "Coming Down: Stomps",
+      "enabled": false
+    },
+    {
+      "name": "Completion Marks for ALL Modded Characters[Rep/Rep+]",
+      "enabled": false
+    },
+    {
+      "name": "Cooler Completion Marks [REP+]",
+      "enabled": true
+    },
+    {
+      "name": "Deal Visual Change",
+      "enabled": true
+    },
+    {
+      "name": "drop trinkets faster",
+      "enabled": true
+    },
+    {
+      "name": "'Enhanced Boss Bars",
+      "enabled": true
+    },
+    {
+      "name": "!!~External item descriptions",
+      "enabled": true
+    },
+    {
+      "name": "GoodTrip",
+      "enabled": true
+    },
+    {
+      "name": "Hush Now Drops Eden's Blessing",
+      "enabled": true
+    },
+    {
+      "name": "Instant Fires and Poops",
+      "enabled": true
+    },
+    {
+      "name": "Instant Restart",
+      "enabled": true
+    },
+    {
+      "name": "[REP(+)] Laser Ludovico Fix",
+      "enabled": true
+    },
+    {
+      "name": "No Jam",
+      "enabled": true
+    },
+    {
+      "name": "No More Hidden Enemies",
+      "enabled": true
+    },
+    {
+      "name": "NO CURSES",
+      "enabled": true
+    },
+    {
+      "name": "No Empty Pedestals",
+      "enabled": true
+    },
+    {
+      "name": "Planetarium Chance [REP+]",
+      "enabled": true
+    },
+    {
+      "name": "pog for good pills",
+      "enabled": true
+    },
+    {
+      "name": "!POG for Good Items",
+      "enabled": true
+    },
+    {
+      "name": "&quot;?&quot; Marked Tinted Rocks",
+      "enabled": true
+    },
+    {
+      "name": "Range fix for Bag of Crafting",
+      "enabled": true
+    },
+    {
+      "name": "Range fix for Bones &amp; Sword",
+      "enabled": true
+    },
+    {
+      "name": "Rare Secret Rooms",
+      "enabled": true
+    },
+    {
+      "name": "(REP) Faster Animations",
+      "enabled": true
+    },
+    {
+      "name": "!!! (REP) Improved Chargebar",
+      "enabled": true
+    },
+    {
+      "name": "Simple FPS Counter",
+      "enabled": true
+    },
+    {
+      "name": "Spindown Dice Preview (Reupload)",
+      "enabled": true
+    },
+    {
+      "name": "Stats+",
+      "enabled": true
+    },
+    {
+      "name": "There's No Rush",
+      "enabled": true
+    },
+    {
+      "name": "TimeMachine",
+      "enabled": true
+    },
+    {
+      "name": "cry",
+      "enabled": true
+    },
+    {
+      "name": "unintrusive pause menu",
+      "enabled": true
+    },
+    {
+      "name": "Unique Coins",
+      "enabled": true
+    },
+    {
+      "name": "Visible Challenge Unlocks",
+      "enabled": true
+    },
+    {
+      "name": "Watch out, Explosion!",
+      "enabled": false
+    },
+    {
+      "name": "Watch out, laser!",
+      "enabled": false
+    }
+  ],
+  "parts": [
+    {
+      "url": "preset-0.bin",
+      "bytes": 4194304,
+      "sha256": "c3983f882564dcca8d4d8c54b1b39f43bfdce1cb7f6a64534bcf120df1d6c987"
+    },
+    {
+      "url": "preset-1.bin",
+      "bytes": 4194304,
+      "sha256": "b3344b8775ba3b1902534651854d0e75ddab7511a7541b9ea5b0f9b8ea3cf97b"
+    },
+    {
+      "url": "preset-2.bin",
+      "bytes": 4194304,
+      "sha256": "a52581b2d9db4b17f57fdb7b6695c15255ef329ce52122ecf4ac68a4b84850db"
+    },
+    {
+      "url": "preset-3.bin",
+      "bytes": 4194304,
+      "sha256": "d327e4208b64fe2dac3859dd234dca6c59e30a98cf81e0119b4091b6b86393b9"
+    },
+    {
+      "url": "preset-4.bin",
+      "bytes": 4194304,
+      "sha256": "0decc76a74992c44c8a7e945d7bb3c3b2d9d72fed69ca32e325f44714a69d6a6"
+    },
+    {
+      "url": "preset-5.bin",
+      "bytes": 4194304,
+      "sha256": "4b38c442d32b05140c2c936e8afcfdc180b0238560fad99bf5b3bc904b99ba35"
+    },
+    {
+      "url": "preset-6.bin",
+      "bytes": 101035,
+      "sha256": "9fb60e7b4c628d4e1a02daed40a39d8b0615594f597289990893b9c05097eff6"
+    }
+  ]
+}
