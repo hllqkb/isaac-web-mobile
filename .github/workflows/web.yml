@@ -106,6 +106,9 @@ jobs:
           const html=fs.readFileSync('game.html','utf8');
           const modules=JSON.parse(html.match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
           const order=JSON.parse(html.match(/var order = (\[.*?\]);/s)[1]);
+          const touchStyleStart=html.indexOf('/* Touch play:');
+          if(touchStyleStart<0)throw Error('Production touch styles missing');
+          const touchStyles=html.slice(touchStyleStart,html.indexOf('</style>',touchStyleStart));
           const browser=await chromium.launch({headless:true});
           const errors=[];
           async function controls(context,coarse) {
@@ -113,7 +116,7 @@ jobs:
             page.on('pageerror',error=>errors.push(error.message));
             await page.route('**/control-harness',route=>route.fulfill({contentType:'text/html',body:'<main></main>'}));
             await page.goto('http://127.0.0.1:8765/control-harness');
-            await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#201912}#stage{position:absolute;left:140px;top:20px;width:480px;height:270px}canvas{width:100%;height:100%;background:#493b2c}</style><main><div id="stage"><canvas id="canvas" width="480" height="270"></canvas></div></main>');
+            await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#201912}#stage{position:absolute;left:140px;top:20px;width:480px;height:270px}#canvas{display:block;width:100%;height:100%;background:#493b2c}${touchStyles}</style><main><div id="stage"><canvas id="canvas" width="480" height="270"></canvas></div></main>`);
             await page.evaluate(async({modules,order})=>{
               const urls={};
               for(const name of order) {
