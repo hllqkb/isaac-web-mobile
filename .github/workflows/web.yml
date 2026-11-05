@@ -114,18 +114,51 @@ jobs:
           const worker=boot.match(/const READER_WORKER=(`[^`]*`);/s);
           assert.ok(worker,'Pinned reader worker source not found');
           const source=new Function('return '+worker[1])();
-          for(const phase of ['headers','body']) {
+          const shortened=source.replace('createReaderFetch({fetch:fetch.bind(globalThis)})',
+            'createReaderFetch({fetch:fetch.bind(globalThis),headerMs:30,idleMs:70})');
+          assert.notEqual(shortened,source,'Worker must use the guarded fetch');
+          const run=async(fetch,url='https://example.invalid/chunk.bin#r=0-3!4',len=4)=>{
+            let timer,attempts=0;
             const messages=[];
-            const context=vm.createContext({Response,ReadableStream,Uint8Array,ArrayBuffer,DecompressionStream,
-              setTimeout,clearTimeout,onmessage:null,postMessage:message=>messages.push(message),
-              fetch:phase==='headers'?()=>new Promise(()=>{}):async()=>new Response(new ReadableStream({start(){}}),
-                {status:206,headers:{'content-range':'bytes 0-3/4'}})});
-            vm.runInContext(source,context);
-            context.onmessage({data:{want:1,key:'fixture',url:'https://example.invalid/chunk.bin#r=0-3!4',len:4}});
-            await new Promise(resolve=>setTimeout(resolve,60));
-            assert.equal(messages.filter(message=>message.want===1).length,0);
-            console.log('REPRODUCED READER WAIT WITHOUT RESPONSE OR DEADLINE',phase);
+            const result=new Promise((resolve,reject)=>{
+              timer=setTimeout(()=>reject(Error('Reader failed to settle')),3000);
+              const context=vm.createContext({Response,ReadableStream,Uint8Array,ArrayBuffer,DecompressionStream,
+                AbortController,performance,setTimeout,clearTimeout,onmessage:null,
+                postMessage:message=>{messages.push(message);if(message.want===1)resolve(message);},
+                fetch:(...args)=>fetch(...args,++attempts)});
+              vm.runInContext(shortened,context);
+              context.onmessage({data:{want:1,key:'fixture',url,len}});
+            });
+            try{return {message:await result,messages,attempts:()=>attempts};}finally{clearTimeout(timer);}
+          };
+          const good=()=>new Response(new Uint8Array([1,2,3,4]),{status:206,headers:{'content-range':'bytes 0-3/4'}});
+          for(const phase of ['headers','body','arraybuffer']) {
+            const hanging=()=>phase==='headers'?new Promise(()=>{}):phase==='body'?
+              new Response(new ReadableStream({start(){}}),{status:206,headers:{'content-range':'bytes 0-3/4'}}):
+              {ok:true,status:206,headers:new Headers({'content-range':'bytes 0-3/4'}),arrayBuffer:()=>new Promise(()=>{})};
+            const recovered=await run((url,init,attempt)=>attempt===1?hanging():good());
+            assert.deepEqual([...new Uint8Array(recovered.message.buf)],[1,2,3,4]);
+            assert.equal(recovered.attempts(),2);
+            const failed=await run(hanging);
+            assert.equal(failed.message.buf,null);assert.equal(failed.attempts(),4);
+            assert.equal(failed.messages.filter(message=>message.download).length,0);
+            console.log('ACTUAL READER WORKER RECOVERS OR FAILS WITHIN BOUNDS',phase);
           }
+          const slow=await run(()=>new Response(new ReadableStream({async start(c){
+            for(let i=1;i<=4;i++){await new Promise(resolve=>setTimeout(resolve,35));c.enqueue(new Uint8Array([i]));}c.close();
+          }}),{status:206,headers:{'content-range':'bytes 0-3/4'}}));
+          assert.deepEqual([...new Uint8Array(slow.message.buf)],[1,2,3,4]);assert.equal(slow.attempts(),1);
+          for(const kind of ['wrong-range','short-body']) {
+            const recovered=await run((url,init,attempt)=>attempt===1?
+              new Response(new Uint8Array(kind==='short-body'?[1,2]:[1,2,3,4]),
+                {status:206,headers:{'content-range':kind==='wrong-range'?'bytes 1-4/4':'bytes 0-3/4'}}):good());
+            assert.equal(recovered.attempts(),2);assert.deepEqual([...new Uint8Array(recovered.message.buf)],[1,2,3,4]);
+          }
+          const whole=await run(()=>new Response(new Uint8Array([1,2,3,4])),
+            'https://example.invalid/chunk.bin#r=1-2!4',2);
+          assert.deepEqual([...new Uint8Array(whole.message.buf)],[2,3]);
+          assert.equal(whole.attempts(),1);
+          console.log('SLOW PROGRESS, RANGE VALIDATION AND HTTP 200 FALLBACK PRESERVED');
           const start=boot.indexOf('window.isaacPendingReadStats='),end=boot.indexOf(';window.isaacLazyStats=',start);
           assert.ok(start>=0&&end>start,'Reader diagnostic hook not found');
           const pendingReads=new Map(Array.from({length:20},(_,i)=>[i,{src:'resources/packed/gfx.a',off:i*1024,len:1024,t0:1000+i}]));
