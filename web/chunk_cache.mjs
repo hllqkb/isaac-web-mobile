@@ -4,7 +4,12 @@ export const CHUNKS = [{"path":"./chunks/a/a0.bin?v=186cb3ec","bytes":4383373,"s
 export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.location?.href,
   cacheStorage=globalThis.caches,request=globalThis.fetch?.bind(globalThis),crypto=globalThis.crypto,
   cacheMs=1500,cacheName='isaac-raw-chunks-v1-d097d9ae',now=()=>performance.now(),
-  retryWait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),segmentBytes=1048576}={}) {
+  retryWait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),segmentBytes=1048576,concurrency=16}={}) {
+  const validateConcurrency=value=>{
+    if(!Number.isInteger(value)||value<1||value>128)throw new RangeError('invalid concurrency: expected an integer from 1 to 128');
+    return value;
+  };
+  concurrency=validateConcurrency(concurrency);
   if(!Number.isSafeInteger(segmentBytes)||segmentBytes<1)throw Error('invalid segment size');
   const canonical=url=>{const u=new URL(url,baseUrl);u.hash='';u.searchParams.delete('w');return u.href;};
   const known=new Map(entries.map(entry=>[canonical(entry.path||entry.url),entry]));
@@ -107,6 +112,10 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
     }
   }
   let running=null;
+  function setConcurrency(value) {
+    if(running)throw Error('download is active; pause before changing concurrency');
+    concurrency=validateConcurrency(value);return concurrency;
+  }
   function pause() {
     paused=true;stopped=true;for(const controller of controllers)controller.abort();
     return running?running.catch(()=>undefined).then(()=>summary()):Promise.resolve(summary());
@@ -170,7 +179,7 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
               finally{active.delete(key);inFlight--;wake();}
             }
           }
-          await Promise.all(Array.from({length:4},()=>worker()));
+          await Promise.all(Array.from({length:concurrency},()=>worker()));
           if(failure)throw failure;if(stopped)throw abortError();
           let retry=false;
           for(const file of files){
@@ -205,9 +214,9 @@ export function createVerifiedChunkCache({entries=CHUNKS,baseUrl=globalThis.loca
     const files=[...active.values()].map(info=>({...info}));
     const selected=files.find(info=>info.retrying)||files[0];
     const etaSeconds=state.completed===known.size?0:bytesPerSecond>0?Math.max(0,state.total-state.received)/bytesPerSecond:null;
-    return {...state,totalFiles:known.size,complete:state.completed===known.size&&!state.active&&!paused&&!stopped&&!state.error,paused,bytesPerSecond,etaSeconds,activeFiles:files.length,networkTasks:files.length,files,
+    return {...state,concurrency,totalFiles:known.size,complete:state.completed===known.size&&!state.active&&!paused&&!stopped&&!state.error,paused,bytesPerSecond,etaSeconds,activeFiles:files.length,networkTasks:files.length,files,
       retrying:files.some(info=>info.retrying),currentFile:selected?.file||null,attempt:selected?.attempt||0,
       memoizedBlobs:blobs.size,memoizedBytes:blobBytes};
   };
-  return {preload,pause,readRange,readWhole,summary,canonical};
+  return {preload,pause,setConcurrency,readRange,readWhole,summary,canonical};
 }
