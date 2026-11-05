@@ -24,6 +24,7 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import fs from 'node:fs';
+          import assert from 'node:assert/strict';
           import {spawnSync} from 'node:child_process';
           import {createFramePacer} from './mobile/frame_clock.mjs';
           const page=fs.readFileSync('game.html','utf8'),source=fs.readFileSync('upstream/game.html','utf8');
@@ -38,6 +39,21 @@ jobs:
           }
           for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery'])
             if(modules['mobile_'+name+'.mjs']!==fs.readFileSync('mobile/'+name+'.mjs','utf8'))throw Error('Stale mobile module '+name);
+          const pacing=modules['boot_web.mjs'].match(/const cappedFramePacer=params.get\('framepacer'\)!=='off';cfg.isaacPaceFrame=cappedFramePacer\?createFramePacer\(\):null;window.isaacPacingMode=cappedFramePacer\?'capped60':'original-yield';/);
+          assert.ok(pacing,'Explicit pacing switch not found');
+          const configure=new Function('params','cfg','window','createFramePacer',pacing[0]);
+          for(const [query,mode] of [['','capped60'],['framepacer=off','original-yield'],['framepacer=unknown','capped60']]) {
+            const cfg={},window={},marker=()=>{},calls=[];
+            configure(new URLSearchParams(query),cfg,window,()=>{calls.push('create');return marker;});
+            assert.equal(window.isaacPacingMode,mode);
+            assert.equal(cfg.isaacPaceFrame,mode==='capped60'?marker:null);
+            assert.equal(calls.length,mode==='capped60'?1:0);
+          }
+          // Removing the optional call must recover the exact pinned yield implementation.
+          const yieldText=text=>text.slice(text.indexOf('function __asyncjs__isaac_yield_js(work)'),text.indexOf('__asyncjs__isaac_yield_js.sig="id";'));
+          assert.ok(yieldText(modules['boot.mjs']).length>0);
+          assert.equal(yieldText(modules['boot.mjs']).replace('if(Module.isaacPaceFrame)await Module.isaacPaceFrame();',''),yieldText(registry(source)['boot.mjs']));
+          console.log('DEFAULT AND EXPLICIT OFF PACING CONFIGURATION VERIFIED; PINNED YIELD UNCHANGED');
           // Synthetic clock: this checks the JS pacer's call boundaries only.
           // Native render skips change the number of present/yield calls per game tick.
           // Do not infer NativeGameTick rate from the number of pace() calls.
@@ -354,7 +370,7 @@ jobs:
               const page=await context.newPage(),errors=[];
               page.on('pageerror',error=>errors.push(error.message));
               await page.route('**/diagnostics-harness',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><body><main><canvas tabindex="0"></canvas></main><script>
-                window.isaacFrame=20;window.keyboardTrace=[];
+                window.isaacFrame=20;window.keyboardTrace=[];window.isaacPacingMode='capped60';
                 window.isaacResourceStats=()=>({attempts:2,fallbacks:1,failures:0,timeouts:1,waiting:1,active:[{key:'1:31',received:1024,fallback:true}]});
                 window.isaacSaveStats=()=>({pending:2,inFlight:1,lastError:'fixture: save transaction aborted'});
                 addEventListener('keydown',e=>keyboardTrace.push('down:'+e.key));addEventListener('keyup',e=>keyboardTrace.push('up:'+e.key));
@@ -369,6 +385,11 @@ jobs:
               if(mobile)await button.tap();else await button.click();
               await page.keyboard.up('w');
               const panel=page.locator('#isaac-diagnostic-panel');assert.ok(await panel.isVisible());
+              assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'capped60');
+              assert.ok((await panel.innerText()).includes('新增限帧开启（默认）'));
+              await page.evaluate(()=>{window.isaacPacingMode='original-yield';isaacDiagnosticReport();});
+              assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'original-yield');
+              assert.ok((await panel.innerText()).includes('新增限帧关闭（原始 yield）'));
               assert.ok((await panel.innerText()).includes('游戏正在等待资源读取'));
               assert.ok((await panel.innerText()).includes('2 个待写'));
               assert.ok((await panel.innerText()).includes('save transaction aborted'));
