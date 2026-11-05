@@ -10,8 +10,8 @@ export async function prepareResources() {
   screen.setAttribute('aria-label','准备游戏资源');
   screen.style.cssText='position:fixed;inset:0;z-index:10000;display:grid;place-items:center;padding:24px;background:#1c1915;color:#e7d7bb;font:15px/1.7 system-ui;overflow:auto';
   screen.innerHTML=`<div style="width:min(100%,460px)">
-    <h1 style="margin:0 0 12px;font-size:26px">准备游戏资源</h1>
-    <p style="margin:0 0 20px">首次需要下载完整资源，之后会复用缓存，减少游戏中临时加载的停顿。</p>
+    <h1 style="margin:0 0 12px;font-size:26px">${prepared?'正在启动游戏':'准备游戏资源'}</h1>
+    <p style="margin:0 0 20px">${prepared?'正在检查本地资源，已完成的文件会直接复用。':'首次需要下载完整资源，之后会复用缓存，减少游戏中临时加载的停顿。'}</p>
     <progress max="1" value="0" aria-label="资源下载进度" style="width:100%;height:12px;accent-color:#bc9b6c"></progress>
     <p data-progress role="status" aria-live="polite">正在检查已下载的资源。</p>
     <p data-transfer style="margin:0 0 16px"></p>
@@ -73,7 +73,8 @@ export async function prepareResources() {
       estimate=`预计还需约 ${minutes?minutes+' 分 ':''}${seconds%60} 秒`;
     }
     const activity=state.activeFiles>1?` · ${state.activeFiles} 个文件同时下载`:'';
-    const detail=`下载速度：${rate} · ${estimate}${activity}`;
+    const checking=prepared&&downloading&&!state.downloadedBytes&&!state.activeFiles;
+    const detail=checking?'正在检查本地缓存':`下载速度：${rate} · ${estimate}${activity}`;
     if(transfer.textContent!==detail)transfer.textContent=detail;
   }
   const timer=setInterval(render,500);
