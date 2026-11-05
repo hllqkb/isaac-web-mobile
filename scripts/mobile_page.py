@@ -64,7 +64,9 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     if modules['boot_web.mjs'].count(config_anchor) != 1:
         raise ValueError('Engine frame clock configuration point changed')
     modules['boot_web.mjs'] = "import{createFramePacer}from'./mobile_frame_clock.mjs';" + modules['boot_web.mjs'].replace(
-        config_anchor, 'cfg.isaacPaceFrame=createFramePacer();' + config_anchor)
+        config_anchor, "const cappedFramePacer=params.get('framepacer')!=='off';"
+        "cfg.isaacPaceFrame=cappedFramePacer?createFramePacer():null;"
+        "window.isaacPacingMode=cappedFramePacer?'capped60':'original-yield';" + config_anchor)
     controls = modules['touch_controls.mjs']
     controls = "import{createMobilePerformance}from'./mobile_performance.mjs';import{createMobileButtons}from'./mobile_buttons.mjs';" + controls
     input_anchor = 'const input=createTouchInput({readFrame:()=>state.frame,emit});'
