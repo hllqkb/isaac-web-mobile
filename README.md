@@ -2,7 +2,7 @@
 
 基于 [The Browsing of Isaac](https://github.com/chiikabu/the-browsing-of-isaac) 的个人配置版：预置我的 Chrome 存档和 mod，加入手机横屏触控、帧率节奏控制、资源缓存与存档写入保护。
 
-[打开网页版](https://hllqkb.github.io/isaac-web-setup/) · [下载 Android APK](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) · [版本与源码](https://github.com/hllqkb/isaac-web-setup/releases/tag/v2026.11.05)
+[打开网页版](https://isaac.hllqk.cn/) · [下载 Android APK](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) · [版本与源码](https://github.com/hllqkb/isaac-web-setup/releases/tag/v2026.11.05)
 
 更新日期：2026-11-05。初始存档快照：2026-11-04。
 
@@ -24,13 +24,13 @@
 
 | | 网页版 | Android 离线版 |
 | --- | --- | --- |
-| 入口 | [开始游戏](https://hllqkb.github.io/isaac-web-setup/) | [下载 APK，约 624 MB](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) |
+| 入口 | [开始游戏](https://isaac.hllqk.cn/) | [下载 APK，约 624 MB](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-2026-11-05.apk) |
 | 运行环境 | 已验证桌面 Chrome；手机自动启用触控布局 | Android 10 及以上，arm64-v8a |
-| 游戏资源 | 首次联网加载，后续利用浏览器缓存 | 安装包内置资源与独立 Chromium 内核，可离线玩 |
+| 游戏资源 | 首次从同一域名加载全部资源，后续利用浏览器缓存 | 安装包内置资源与独立 Chromium 内核，可离线玩 |
 | 存档 | 保存在当前浏览器、当前网站的本地数据中 | 保存在当前应用数据中 |
 | 源码 | 本仓库的网页与共享模块 | [对应版本完整源码 ZIP](https://github.com/hllqkb/isaac-web-setup/releases/download/v2026.11.05/Isaac-Mobile-source-2026-11-05.zip) |
 
-第一次从网页首页进入时，会导入约 25 MB 的初始配置。现有存档不会被正常启动流程自动覆盖；每个人之后各自游玩，进度互不影响。网页和 APK 的存档分别存储，不会自动同步。清除网站数据或卸载应用会删除对应的本地进度。
+第一次从网页首页进入时，会导入约 25 MB 的初始配置。现有存档不会被正常启动流程自动覆盖；每个人之后各自游玩，进度互不影响。网页和 APK 的存档分别存储，不会自动同步。新域名与旧 github.io 域名的浏览器存档也各自独立，域名变更不会自动迁移旧站进度，请保留原站点数据。清除网站数据或卸载应用会删除对应的本地进度。
 
 ## 这个版本做了什么
 
@@ -68,7 +68,7 @@
 
 - `game.html`：生成后的游戏页面；`upstream/game.html`：上游页面快照。
 - `mobile/`：网页与 APK 共用的触控、节奏、缓存和恢复模块。
-- `web/`、`scripts/`：网页资源传输及页面补丁。
+- `web/`、`scripts/`：网页资源传输、页面补丁及云端完整站点打包。自有域名站点从已校验的 APK 提取 38 个资源分片，同站托管，游戏运行无需访问 GitHub 或 jsDelivr；mod 在线目录关闭，预装 mod 和本地 ZIP 导入保留。
 - `bootstrap.js`、`preset-*.bin`、`preset-info.json`：首次配置导入与快照信息。
 - `assets/screenshots/`：本 README 使用的真实游戏截图。
 - Releases：已签名 APK 和对应 Android 源码；大文件不放进 Git 历史。
