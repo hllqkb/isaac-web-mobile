@@ -428,6 +428,111 @@ jobs:
             }
           } finally {await browser.close();}
           JS
+      - name: Verify raw chunk CacheStorage and actual Worker range reuse
+        run: |
+          python3 -m http.server 8766 --bind 127.0.0.1 > output/chunk-server.log 2>&1 &
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import {chromium} from 'playwright';
+          const modules=JSON.parse(fs.readFileSync('game.html','utf8').match(/window\.__isaacModules = (.*?);<\/script>/s)[1]);
+          const worker=new Function('return '+modules['boot_web.mjs'].match(/const READER_WORKER=(`[^`]*`);/s)[1])();
+          const browser=await chromium.launch({headless:true});
+          const page=await browser.newPage();
+          let requests=0;
+          await page.route('**/fixture-chunk.bin*',async route=>{
+            requests++;
+            const req=route.request(),url=new URL(req.url());
+            let bytes=Buffer.from([0,1,2,3,4,5,6,7]);
+            if(url.searchParams.get('case')==='short')bytes=bytes.subarray(0,4);
+            if(url.searchParams.get('case')==='hash')bytes=Buffer.alloc(8,9);
+            const range=req.headers().range;
+            if(range){const [from,to]=range.slice(6).split('-').map(Number);await route.fulfill({status:206,body:bytes.subarray(from,to+1),headers:{'content-range':`bytes ${from}-${to}/8`}});}
+            else await route.fulfill({status:200,body:bytes});
+          });
+          try {
+            await page.goto('http://127.0.0.1:8766/web/chunk_cache.mjs');
+            const report=await page.evaluate(async worker=>{
+              const {createVerifiedChunkCache,CHUNKS}=await import('/web/chunk_cache.mjs');
+              if(CHUNKS.length!==38||CHUNKS.reduce((n,e)=>n+e.bytes,0)!==391071436)throw Error('Incomplete pinned inventory');
+              const bytes=new Uint8Array([0,1,2,3,4,5,6,7]);
+              const sha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+              const url=new URL('/fixture-chunk.bin?v=fixture',location.href).href;
+              const entry={path:url,bytes:8,sha256:sha},cacheName='isaac-cloud-raw-fixture';
+              const cache=createVerifiedChunkCache({entries:[entry],cacheName,baseUrl:location.href});
+              const init={headers:{Range:'bytes=2-5'}};
+              if(await cache.readRange(url,init)!==null)throw Error('Cold cache falsely hit');
+              const cold=await fetch(url,init);if(cold.status!==206)throw Error('Cold range network fallback failed');
+              await cache.preload();
+              if(cache.summary().memoizedBlobs!==0)throw Error('Preload retained full chunk blobs');
+              const warm=createVerifiedChunkCache({entries:[entry],cacheName,baseUrl:location.href,request:()=>{throw Error('Warm preload must not fetch');}});
+              await warm.preload();if(warm.summary().memoizedBlobs!==0)throw Error('Warm metadata check loaded blobs');
+              const response=await warm.readRange(url+'&w=2-5#ignored',init);
+              if(response.status!==206||response.headers.get('content-range')!=='bytes 2-5/8'||response.headers.get('content-length')!=='4')throw Error('Cached range headers invalid');
+              if(String([...new Uint8Array(await response.arrayBuffer())])!=='2,3,4,5')throw Error('Cached range bytes invalid');
+              await Promise.all(Array.from({length:4},()=>warm.readRange(url,init)));
+              if(warm.summary().memoizedBytes!==8)throw Error('Concurrent reads inflated blob accounting');
+              const source='const fetch=(...args)=>{postMessage({network:true});return globalThis.fetch(...args);};'+worker;
+              const w=new Worker(URL.createObjectURL(new Blob([source],{type:'text/javascript'})));
+              const workerResult=await new Promise((resolve,reject)=>{
+                const timer=setTimeout(()=>{w.terminate();reject(Error('Cached worker read timed out'));},3000);
+                w.onmessage=event=>{if(event.data.network){clearTimeout(timer);w.terminate();reject(Error('Warm Worker hit the network'));}else if(event.data.want===1){clearTimeout(timer);resolve(event.data);}};
+                w.onerror=event=>{clearTimeout(timer);reject(Error(event.message));};
+                w.postMessage({chunkCache:{entries:[entry],cacheName,baseUrl:location.href}});
+                w.postMessage({want:1,key:'fixture',url:url+'&w=2-5#r=2-5!8',len:4});
+              });w.terminate();
+              if(String([...new Uint8Array(workerResult.buf)])!=='2,3,4,5')throw Error('Actual Worker did not reuse raw bytes');
+              for(const kind of ['short','hash']){
+                const badUrl=url+'&case='+kind,badName='isaac-cloud-bad-'+kind;
+                const bad=createVerifiedChunkCache({entries:[{...entry,path:badUrl}],cacheName:badName,baseUrl:location.href});
+                let failed=false;try{await bad.preload();}catch{failed=true;}
+                if(!failed||await (await caches.open(badName)).match(badUrl))throw Error('Invalid chunk was cached');
+              }
+              const stuck=createVerifiedChunkCache({entries:[entry],cacheMs:30,cacheStorage:{open:()=>new Promise(()=>{})},baseUrl:location.href});
+              if(await stuck.readRange(url,init)!==null)throw Error('Stalled cache did not bypass');
+              const rejected=createVerifiedChunkCache({entries:[entry],cacheStorage:{open:()=>Promise.reject(Error('quota'))},baseUrl:location.href});
+              if(await rejected.readRange(url,init)!==null)throw Error('Rejected cache did not bypass');
+              return {workerBytes:[...new Uint8Array(workerResult.buf)],warm:warm.summary(),inventory:CHUNKS.length};
+            },worker);
+            assert.equal(requests,4); // cold range, full preload, short preload and hash mismatch
+            console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
+            for(const scenario of ['success','retry','continue']) {
+              const gatePage=await browser.newPage();
+              await gatePage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
+                export function createVerifiedChunkCache(){let completed=0;return {
+                  summary:()=>({received:completed?8:0,total:8,completed}),
+                  preload:()=>{window.__preloadCalls=(window.__preloadCalls||0)+1;
+                    if(window.__scenario==='success')return new Promise(resolve=>{window.__release=()=>{completed=38;resolve();};});
+                    if(window.__scenario==='retry'&&window.__preloadCalls>1){completed=38;return Promise.resolve();}
+                    return Promise.reject(Error('quota fixture'));
+                  }
+                };}
+              `}));
+              await gatePage.goto('http://127.0.0.1:8766/web/preload.mjs');
+              await gatePage.setContent('<div id="overlay">original game loading</div>');
+              await gatePage.evaluate(async scenario=>{
+                window.__scenario=scenario;window.__finished=false;
+                const {prepareResources}=await import('/web/preload.mjs?fixture='+scenario);
+                window.__gate=prepareResources().then(()=>{window.__finished=true;});
+              },scenario);
+              assert.equal(await gatePage.evaluate(()=>window.__finished),false);
+              assert.ok(await gatePage.locator('section[aria-label="准备游戏资源"]').isVisible());
+              if(scenario==='success')await gatePage.evaluate(()=>window.__release());
+              else {
+                await gatePage.locator('[data-error]').waitFor({state:'visible'});
+                assert.ok((await gatePage.locator('[data-error]').innerText()).includes('临时加载仍可能卡顿'));
+                await gatePage.locator(scenario==='retry'?'[data-retry]':'[data-continue]').click();
+              }
+              await gatePage.waitForFunction(()=>window.__finished);
+              assert.equal(await gatePage.locator('section[aria-label="准备游戏资源"]').count(),0);
+              assert.equal(await gatePage.locator('#overlay').isVisible(),true);
+              assert.equal(await gatePage.evaluate(()=>window.isaacPreloadCompatibility===true),scenario==='continue');
+              if(scenario==='retry')assert.equal(await gatePage.evaluate(()=>window.__preloadCalls),2);
+              console.log('PRELOAD GATE LIFETIME VERIFIED',scenario);
+              await gatePage.close();
+            }
+          }finally{await browser.close();}
+          JS
       - name: Verify committed page matches the generated page
         run: git diff --exit-code -- game.html
       - uses: actions/upload-artifact@v4
@@ -441,7 +546,7 @@ jobs:
           name: Web-verification
           path: output/
   hosted:
-    if: startsWith(github.ref_name, 'site/mobile-custom-host-')
+    if: startsWith(github.ref_name, 'site/mobile-custom-host-') || github.ref_name == 'site/mobile-chunk-cache-prototype-20261105'
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -466,12 +571,99 @@ jobs:
               if 'base' in before: after['base']=before['base']
               else: after.pop('base',None)
           new['base']=old['base']
+          assert new.pop('hostedFullCache') is True
           assert new==old,'Game resource identities or metadata changed'
           module_pattern=r'window\.__isaacModules = (.*?);</script>'
           assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
           assert 'window.isaacModCatalogue = null;' in hosted
           assert './web/diagnostics.mjs' in hosted
+          gate=hosted.index("window.isaacFullCacheReady=new Promise")
+          assert hosted.index('window.__isaacPortableData =') < gate < hosted.index('var P = window.__isaacPortableData')
+          assert 'if (P.hostedFullCache) await window.isaacFullCacheReady;' in hosted
+          assert hosted.index('window.isaacFullCacheReady.then(function () {') < hosted.index('document.body.appendChild(s);')
+          assert 'data-cache-reload' in hosted and 'data-cache-online' in hosted
+          for name in ['preload.mjs','chunk_cache.mjs','reader_guard.mjs']:
+              assert Path('dist/web',name).is_file()
+          chunks=json.loads(re.search(r'export const CHUNKS = (\[.*?\]);',Path('web/chunk_cache.mjs').read_text()).group(1))
+          inventory={e['path']:e for e in json.loads(Path('dist/inventory.json').read_text())}
+          assert len(chunks)==len(inventory)==38
+          for e in chunks:
+              path=e['path'].split('?')[0].removeprefix('./')
+              assert (e['bytes'],e['sha256'])==(inventory[path]['bytes'],inventory[path]['sha256'])
           assert len(list(Path('dist/chunks').rglob('*.bin')))==38
           for i in range(7): assert Path(f'dist/preset-{i}.bin').read_bytes()==Path(f'preset-{i}.bin').read_bytes()
           print('SAME-ORIGIN RESOURCE BUNDLE VERIFIED; ENGINE, CLOCK, MOD PRESET AND DIAGNOSTICS PRESERVED')
           PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify complete raw resource cache using the packaged local assets
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+          python3 -m http.server 8767 --bind 127.0.0.1 --directory dist > /tmp/isaac-full-cache-server.log 2>&1 &
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import {chromium} from 'playwright';
+          const browser=await chromium.launch({headless:true});
+          const page=await browser.newPage();
+          let requests=0;
+          page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/chunks/'))requests++;});
+          const cuts=['b14','b20'].map(tag=>({path:'chunks/b/'+tag+'.bin',from:123,take:1024,
+            bytes:[...fs.readFileSync('dist/chunks/b/'+tag+'.bin').subarray(123,1147)]}));
+          try {
+            await page.goto('http://127.0.0.1:8767/web/chunk_cache.mjs');
+            const report=await page.evaluate(async cuts=>{
+              const {createVerifiedChunkCache,CHUNKS}=await import('/web/chunk_cache.mjs');
+              const baseUrl=location.origin+'/';
+              const cold=createVerifiedChunkCache({baseUrl});
+              await cold.preload();
+              const first=cold.summary();
+              if(first.completed!==38||first.received!==391071436||first.memoizedBlobs!==0)throw Error('Complete preload failed: '+JSON.stringify(first));
+              const warm=createVerifiedChunkCache({baseUrl,request:()=>{throw Error('Warm preload made a network request');}});
+              await warm.preload();
+              if(warm.summary().memoizedBlobs!==0)throw Error('Warm startup read whole blobs');
+              for(const cut of cuts){
+                const entry=CHUNKS.find(entry=>entry.path.split('?')[0]==='./'+cut.path);
+                const url=new URL(entry.path,baseUrl).href+'&w='+cut.from+'-'+(cut.from+cut.take-1)+'#ignored';
+                const response=await warm.readRange(url,{headers:{Range:'bytes='+cut.from+'-'+(cut.from+cut.take-1)}});
+                if(response.status!==206||response.headers.get('content-range')!=='bytes '+cut.from+'-'+(cut.from+cut.take-1)+'/'+entry.bytes)throw Error('Warm full-bundle range headers wrong');
+                const bytes=[...new Uint8Array(await response.arrayBuffer())];
+                if(JSON.stringify(bytes)!==JSON.stringify(cut.bytes))throw Error('Warm full-bundle range differs from packaged bytes');
+              }
+              return {cold:first,warm:warm.summary()};
+            },cuts);
+            assert.equal(requests,38);
+            assert.equal(report.warm.completed,38);
+            assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
+            console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
+            const hosted=fs.readFileSync('dist/game.html','utf8');
+            const loader=hosted.match(/<script>(window\.isaacFullCacheReady=new Promise[\s\S]*?)<\/script>/)[1];
+            for(const failure of ['entry','dependency']){
+              const retryPage=await browser.newPage();let entryRequests=0;
+              const fixture='<script>window.__isaacPortableData={hostedFullCache:true};window.__launched=false;</script><script>'+loader+'</script><script>window.isaacFullCacheReady.then(()=>{window.__launched=true;});</script>';
+              await retryPage.route('**/loader-fixture.html',route=>route.fulfill({contentType:'text/html',body:fixture}));
+              if(failure==='entry')await retryPage.route('**/web/preload.mjs',route=>{
+                entryRequests++;
+                return entryRequests===1?route.fulfill({status:404,body:'module unavailable'}):route.fulfill({contentType:'text/javascript',body:'export async function prepareResources(){window.__retried=true;}'});
+              });
+              else await retryPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({status:404,body:'dependency unavailable'}));
+              await retryPage.goto('http://127.0.0.1:8767/loader-fixture.html');
+              await retryPage.locator('[data-preload-loader-error]').waitFor({state:'visible'});
+              assert.equal(await retryPage.evaluate(()=>window.__launched),false);
+              if(failure==='entry'){
+                await Promise.all([retryPage.waitForNavigation(),retryPage.locator('[data-cache-reload]').click()]);
+                await retryPage.waitForFunction(()=>window.__launched===true);
+                assert.equal(entryRequests,2);
+                assert.equal(await retryPage.evaluate(()=>window.__retried),true);
+              }else{
+                await retryPage.locator('[data-cache-online]').click();
+                await retryPage.waitForFunction(()=>window.__launched===true);
+                assert.ok(await retryPage.evaluate(()=>window.isaacFullChunkCache===null&&window.isaacPreloadCompatibility===true&&__isaacPortableData.hostedFullCache===false));
+              }
+              console.log('PRELOAD IMPORT FAILURE RECOVERS BEFORE GAME LAUNCH',failure);
+              await retryPage.close();
+            }
+          }finally{await browser.close();}
+          JS
