@@ -58,6 +58,49 @@ def main() -> None:
     if count != 1 or 'https://cdn.jsdelivr.net/' in page:
         raise ValueError('Unbundled third-party resource dependency')
 
+    # Only the same-origin hosted build waits for complete, verified resources.
+    # The legacy CDN page and Android package keep their existing startup path.
+    hosted_manifest = re.search(r'window\.__isaacPortableData = (.*?);</script>', page, re.S)
+    if not hosted_manifest:
+        raise ValueError('Missing hosted preload manifest')
+    hosted_data = json.loads(hosted_manifest.group(1))
+    hosted_data['hostedFullCache'] = True
+    preload_script = """<script>window.isaacFullCacheReady=new Promise(function(resolve){
+  import('./web/preload.mjs').then(function(module){return module.prepareResources();}).then(resolve).catch(function(error){
+    console.error('[isaac preload module]',error);
+    var panel=document.createElement('section');
+    panel.setAttribute('data-preload-loader-error','');
+    panel.setAttribute('role','alert');
+    panel.style.cssText='position:fixed;inset:0;z-index:10001;display:grid;place-content:center;gap:16px;padding:24px;background:#1c1915;color:#e7d7bb;font:16px/1.7 system-ui';
+    var message=document.createElement('p');
+    message.textContent='资源准备模块加载失败。重新加载页面可以重试；也可以先进入游戏，但临时加载仍可能卡顿。';
+    var retry=document.createElement('button');
+    retry.setAttribute('data-cache-reload','');retry.textContent='重新加载页面';
+    retry.onclick=function(){location.reload();};
+    var online=document.createElement('button');
+    online.setAttribute('data-cache-online','');online.textContent='先进入游戏';
+    online.onclick=function(){
+      window.isaacFullChunkCache=null;window.isaacPreloadCompatibility=true;
+      window.__isaacPortableData.hostedFullCache=false;
+      panel.remove();resolve();
+    };
+    for(var button of [retry,online])button.style.cssText='min-height:44px;padding:8px 16px;font:inherit;cursor:pointer';
+    panel.append(message,retry,online);document.body.appendChild(panel);
+  });
+});</script>"""
+    page = (page[:hosted_manifest.start(1)] + json.dumps(hosted_data)
+            + page[hosted_manifest.end(1):hosted_manifest.end()] + preload_script
+            + page[hosted_manifest.end():])
+    launch = '  document.body.appendChild(s);'
+    if page.count(launch) != 1:
+        raise ValueError('Game launch anchor changed')
+    page = page.replace(launch, """  window.isaacFullCacheReady.then(function () {
+    document.body.appendChild(s);
+  }).catch(function (error) {
+    document.getElementById('status').textContent = '资源准备模块加载失败，请刷新后重试。';
+    console.error('[isaac preload startup]', error);
+  });""")
+
     DEST.mkdir(exist_ok=True)
     if any(DEST.iterdir()):
         raise ValueError('Hosted output must start empty')
