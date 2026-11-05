@@ -1,4 +1,4 @@
-"""Add bounded network waits to the pinned hosted game's whole-chunk path."""
+"""Add bounded network waits and reader diagnostics to the pinned hosted game."""
 
 from pathlib import Path
 import json
@@ -51,6 +51,20 @@ def apply_web_transport(page: str, source: Path) -> str:
         raise ValueError('Missing inline modules for reader diagnostics')
     modules = json.loads(registry.group(1))
     boot = modules['boot_web.mjs']
+    worker = re.search(r'const READER_WORKER=`([^`]*?)`;', boot, re.S)
+    if not worker:
+        raise ValueError('Reader worker insertion point changed')
+    guard = (source.parent / 'reader_guard.mjs').read_text().replace('export function ', 'function ', 1)
+    if '`' in guard or '\\' in guard:
+        raise ValueError('Reader guard cannot contain template delimiters or escapes')
+    guarded = worker.group(1)
+    for old, new in {'await fetch(url, init)': 'await readerFetch(url, init)',
+                     'await fetch(url)': 'await readerFetch(url)'}.items():
+        if guarded.count(old) != 1:
+            raise ValueError(f'Reader fetch insertion point changed: {old}')
+        guarded = guarded.replace(old, new)
+    guarded = guard + '\nconst readerFetch = createReaderFetch({fetch:fetch.bind(globalThis)});\n' + guarded
+    boot = boot[:worker.start(1)] + guarded + boot[worker.end(1):]
     anchor = 'window.isaacLazyStats=()=>({'
     if boot.count(anchor) != 1:
         raise ValueError('Reader diagnostic insertion point changed')
