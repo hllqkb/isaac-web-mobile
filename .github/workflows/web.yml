@@ -328,9 +328,9 @@ jobs:
           old=json.loads(re.search(pattern,original,re.S)[1])
           new=json.loads(re.search(pattern,hosted,re.S)[1])
           for before,after in zip(old['streams'],new['streams'],strict=True):
-              assert after['base']==f"./chunks/{before['tag']}"
+              assert after.get('base',new['base'])==f"./chunks/{before['tag']}"
               if 'base' in before: after['base']=before['base']
-              else: after.pop('base')
+              else: after.pop('base',None)
           new['base']=old['base']
           assert new==old,'Game resource identities or metadata changed'
           module_pattern=r'window\.__isaacModules = (.*?);</script>'
