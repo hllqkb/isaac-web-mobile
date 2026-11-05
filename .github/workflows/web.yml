@@ -419,7 +419,8 @@ jobs:
             await page.route('**/game.html?prepared=1',route=>route.fulfill({contentType:'text/html',body:'<p>Prepared game navigation reached</p>'}));
             await page.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
               export const CHUNKS=[{}];
-              export function createVerifiedChunkCache(){let received=0,rejectPending;return {
+              export function createVerifiedChunkCache(options={}){window.__homeConstructed=(window.__homeConstructed||[]).concat(options.concurrency);let received=0,rejectPending;return {
+                setConcurrency:value=>{window.__homeSettings=(window.__homeSettings||[]).concat(value);},
                 summary:()=>({received,total:10000000,completed:received===10000000?1:0,complete:received===10000000,paused:false,bytesPerSecond:2097152,etaSeconds:3,retrying:false}),
                 preload:()=>{window.__homeCalls=(window.__homeCalls||0)+1;
                   if(window.__homeCalls===1)return Promise.reject(Error('connection interrupted fixture'));
@@ -429,6 +430,10 @@ jobs:
             `}));
             await page.goto('http://127.0.0.1:8765/');
             await page.waitForFunction(()=>!document.querySelector('#start').disabled);
+            if(await page.locator('#download-concurrency').inputValue()!=='16')throw Error('Home default concurrency is not 16');
+            if(JSON.stringify(await page.locator('#download-concurrency option').evaluateAll(options=>options.map(option=>Number(option.value))))!=='[4,8,16,32,64,128]')throw Error('Home concurrency options changed');
+            await page.locator('#download-concurrency').selectOption('128');
+            await page.locator('#download-concurrency').selectOption('16');
             await page.locator('#start').click();
             await page.waitForFunction(()=>document.querySelector('#start').textContent==='重试');
             if(!page.url().endsWith('/'))throw Error('Failed preparation navigated to game');
@@ -443,10 +448,13 @@ jobs:
             if(!await page.locator('#enter-fullscreen').isHidden())throw Error('Fullscreen fallback did not clear after success');
             await page.locator('#start').click();
             await page.waitForFunction(()=>typeof window.__finishHome==='function');
-            if(!await page.locator('#start').isDisabled())throw Error('Preparation allows duplicate starts');
+            if(!await page.locator('#start').isDisabled()||!await page.locator('#download-concurrency').isDisabled())throw Error('Active preparation allows duplicate starts or settings changes');
             await page.locator('#prepare-pause').click();
             await page.waitForFunction(()=>document.querySelector('#start').textContent==='继续下载');
             if(!page.url().endsWith('/'))throw Error('Pause incorrectly navigated to game');
+            await page.waitForFunction(()=>!document.querySelector('#download-concurrency').disabled);
+            await page.locator('#download-concurrency').selectOption('32');
+            if(!await page.evaluate(()=>JSON.stringify(window.__homeConstructed)==='[16,16]'&&JSON.stringify(window.__homeSettings)==='[32,32]'&&localStorage.getItem('isaac-download-concurrency')==='32'))throw Error('Home paused concurrency did not update both existing stage caches');
             await page.locator('#start').click();
             await page.waitForFunction(()=>window.__homeCalls===3);
 
@@ -665,10 +673,38 @@ jobs:
               try{await quotaCache.preload();}catch{}
               await quotaCache.preload();
               if(quotaFetches!==1||quotaCache.summary().completed!==1)throw Error('Cache write retry redownloaded verified bytes');
-              let live=0,peak=0;const parallelStore=memoryStore();
-              const parallel=createVerifiedChunkCache({entries:Array.from({length:4},(_,i)=>({...entry,path:url+'&parallel='+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
-                request:async()=>new Response(new ReadableStream({async start(c){live++;peak=Math.max(peak,live);await new Promise(resolve=>setTimeout(resolve,10));c.enqueue(bytes);live--;c.close();}}))});
-              await parallel.preload();if(peak!==4)throw Error('Expected four concurrent network jobs: '+peak);
+              for(const invalid of [0,-1,129,1.5,NaN,Infinity,'16',null]){
+                let rejected=false;
+                try{createVerifiedChunkCache({concurrency:invalid});}catch(error){rejected=error instanceof RangeError&&/concurrency/.test(error.message);}
+                if(!rejected)throw Error('Invalid constructor concurrency accepted: '+String(invalid));
+              }
+              for(const configured of [undefined,1,4,128]){
+                const expected=configured??16,parallelStore=memoryStore();
+                let live=0,peak=0,releaseBatch,timer;
+                const batch=new Promise(resolve=>{releaseBatch=resolve;timer=setTimeout(resolve,1000);});
+                const parallel=createVerifiedChunkCache({...(configured===undefined?{}:{concurrency:configured}),
+                  entries:Array.from({length:expected+3},(_,i)=>({...entry,path:url+'&parallel='+expected+'-'+i})),cacheStorage:parallelStore.api,baseUrl:location.href,
+                  request:async()=>new Response(new ReadableStream({async start(c){
+                    live++;peak=Math.max(peak,live);if(live===expected){clearTimeout(timer);releaseBatch();}
+                    await batch;c.enqueue(bytes);live--;c.close();
+                  }}))});
+                const downloading=parallel.preload();let activeRejected=false;
+                try{parallel.setConcurrency(8);}catch(error){activeRejected=/active|running/.test(error.message);}
+                if(!activeRejected)throw Error('Active concurrency changed without settling downloads');
+                try{await downloading;}finally{clearTimeout(timer);}
+                if(peak!==expected||parallel.summary().concurrency!==expected||!parallel.summary().complete)
+                  throw Error('Configured global network limit was not respected: '+JSON.stringify({configured,expected,peak,state:parallel.summary()}));
+                parallel.setConcurrency(8);
+                if(parallel.summary().concurrency!==8)throw Error('Idle concurrency update was not applied');
+                for(const invalid of [0,129,1.5,'16',null]){
+                  let rejected=false;try{parallel.setConcurrency(invalid);}catch(error){rejected=error instanceof RangeError;}
+                  if(!rejected||parallel.summary().concurrency!==8)throw Error('Invalid concurrency changed an existing cache');
+                }
+                const transferredBeforeWarm=parallel.summary().downloadedBytes;
+                await parallel.preload();
+                if(parallel.summary().downloadedBytes!==transferredBeforeWarm)throw Error('Changing concurrency redownloaded whole-file bytes: '+JSON.stringify({before:transferredBeforeWarm,after:parallel.summary().downloadedBytes}));
+                console.log('GLOBAL CONCURRENCY LIMIT VERIFIED',JSON.stringify({configured:configured??'default',expected,peak}));
+              }
               const cancelStore=memoryStore();let groupFetches=0,groupAborted=false;
               cancelStore.store.put=async()=>{throw Error('write fixture');};
               const group=createVerifiedChunkCache({entries:Array.from({length:3},(_,i)=>({...entry,path:url+'&cancel='+i})),cacheStorage:cancelStore.api,baseUrl:location.href,
@@ -689,7 +725,7 @@ jobs:
               if(rateSample.bytesPerSecond!==4||rateSample.etaSeconds!==1||rateSample.activeFiles!==1)throw Error('Network speed/ETA sample invalid: '+JSON.stringify(rateSample));
               release();await rateDone;await rate.preload();
               if(rate.summary().bytesPerSecond!==0||rate.summary().etaSeconds!==0||rate.summary().downloadedBytes!==8)throw Error('Warm metadata was counted as network transfer');
-              console.log('DOWNLOAD CORE VERIFIED: FOUR JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
+              console.log('DOWNLOAD CORE VERIFIED: DEFAULT 16, CONFIGURABLE 1-128 JOBS, THREE NETWORK ATTEMPTS, ABORT/SETTLE, NO CACHE-WRITE REDOWNLOAD, RATE/ETA');
               const resumeName='isaac-cloud-segment-resume',ranges=[];
               const ranged=(key,init)=>{
                 const range=new Headers(init.headers).get('range');ranges.push(range);
@@ -707,10 +743,12 @@ jobs:
               if(!pendingRange)throw Error('Resume fixture did not reach the second segment');
               await pausedCache.pause();
               if(await aborted!=='AbortError'||pausedCache.summary().complete||!pausedCache.summary().paused)throw Error('Pause contract violated');
+              pausedCache.setConcurrency(8);
+              if(pausedCache.summary().concurrency!==8)throw Error('Settled pause did not permit a concurrency change');
               const partial=await caches.open(resumeName+'-segments-v1'),keys=await partial.keys();
               if(keys.length!==1)throw Error('Completed segment was not durable');
               const savedKey=keys[0],savedPart=await partial.match(savedKey);
-              const resume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,baseUrl:location.href,request:async(...args)=>ranged(...args)});
+              const resume=createVerifiedChunkCache({entries:[entry],cacheName:resumeName,segmentBytes:4,concurrency:128,baseUrl:location.href,request:async(...args)=>ranged(...args)});
               await resume.preload();
               if(JSON.stringify(ranges)!==JSON.stringify(['bytes=0-3','bytes=4-7'])||!resume.summary().complete||resume.summary().downloadedBytes!==4)throw Error('Recreated cache redownloaded a completed segment');
               if((await partial.keys()).length!==0)throw Error('Verified file left its partial segments');
@@ -740,12 +778,15 @@ jobs:
             },worker);
             assert.equal(requests,8); // cold range, full preload, three short and three hash attempts
             console.log('VERIFIED RAW CACHE: COLD FALLBACK, WARM 206 WITHOUT NETWORK, ACTUAL WORKER REUSE',report);
-            for(const scenario of ['success','retry','continue','latewake','denied']) {
+            for(const scenario of ['success','retry','continue','latewake','denied','pause']) {
               const gatePage=await browser.newPage();
               await gatePage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:`
-                export function createVerifiedChunkCache(){let completed=0;return {
+                export function createVerifiedChunkCache(options={}){window.__chosen=options.concurrency;let completed=0;return {
+                  setConcurrency:value=>{window.__chosen=value;},
+                  pause:async()=>{window.__rejectPause(new DOMException('Paused','AbortError'));},
                   summary:()=>({received:completed?8:0,total:8,completed,bytesPerSecond:2097152,etaSeconds:65,activeFiles:2,retrying:!!window.__retrying,attempt:2}),
                   preload:()=>{window.__preloadCalls=(window.__preloadCalls||0)+1;
+                    if(window.__scenario==='pause')return new Promise((resolve,reject)=>{window.__rejectPause=reject;window.__release=()=>{completed=38;resolve();};});
                     if(['success','latewake','denied'].includes(window.__scenario))return new Promise(resolve=>{window.__release=()=>{completed=38;resolve();};});
                     if(window.__scenario==='retry'&&window.__preloadCalls>1){completed=38;return Promise.resolve();}
                     return Promise.reject(Error('quota fixture'));
@@ -767,7 +808,25 @@ jobs:
               },scenario);
               assert.equal(await gatePage.evaluate(()=>window.__finished),false);
               assert.ok(await gatePage.locator('section[aria-label="准备游戏资源"]').isVisible());
-              if(['success','latewake','denied'].includes(scenario)) {
+              if(scenario==='pause') {
+                assert.equal(await gatePage.locator('[data-concurrency]').inputValue(),'16');
+                assert.equal(await gatePage.locator('[data-concurrency]').isDisabled(),true);
+                assert.deepEqual(await gatePage.locator('[data-concurrency] option').evaluateAll(options=>options.map(option=>Number(option.value))),[4,8,16,32,64,128]);
+                await gatePage.locator('[data-pause]').click();
+                await gatePage.locator('[data-error]').waitFor({state:'visible'});
+                await gatePage.waitForFunction(()=>!document.querySelector('[data-concurrency]').disabled);
+                assert.equal(await gatePage.evaluate(()=>window.__finished),false);
+                assert.equal(await gatePage.locator('[data-continue]').isHidden(),true);
+                await gatePage.locator('[data-concurrency]').selectOption('128');
+                assert.equal(await gatePage.evaluate(()=>window.__chosen),128);
+                assert.equal(await gatePage.locator('[data-retry]').innerText(),'继续下载');
+                await gatePage.locator('[data-retry]').click();
+                await gatePage.waitForFunction(()=>window.__preloadCalls===2);
+                assert.equal(await gatePage.locator('[data-concurrency]').isDisabled(),true);
+                assert.equal(await gatePage.evaluate(()=>window.__finished),false);
+                await gatePage.evaluate(()=>window.__release());
+              }
+              else if(['success','latewake','denied'].includes(scenario)) {
                 await gatePage.waitForFunction(()=>window.__wakeRequests===1);
                 await gatePage.waitForFunction(()=>document.querySelector('[data-transfer]').textContent.includes('2.0 MiB/s'));
                 assert.match(await gatePage.locator('[data-transfer]').innerText(),/约 1 分 5 秒/);
@@ -959,11 +1018,11 @@ jobs:
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
             const warmPage=await browser.newPage();
-            await warmPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function createVerifiedChunkCache(){return {summary:()=>({received:8,total:8,completed:38,complete:true}),preload:()=>Promise.resolve()};}'}));
+            await warmPage.route('**/web/chunk_cache.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function createVerifiedChunkCache(){return {summary:()=>({received:8,total:8,completed:38,complete:true}),setConcurrency:value=>{window.__warmConcurrency=value;},preload:()=>Promise.resolve()};}'}));
             await warmPage.goto('http://127.0.0.1:8767/web/preload.mjs?prepared=1');
             await warmPage.setContent('<div id="overlay">original</div>');
             const warmUi=await warmPage.evaluate(async()=>{const {prepareResources}=await import('/web/preload.mjs');await prepareResources();return document.querySelectorAll('section[aria-label="准备游戏资源"]').length;});
-            assert.equal(warmUi,0);await warmPage.close();
+            assert.equal(warmUi,0);assert.equal(await warmPage.evaluate(()=>window.__warmConcurrency),16);await warmPage.close();
             console.log('PREPARED GAME WARM CHECK DOES NOT SHOW A SECOND DOWNLOAD PANEL');
             const hosted=fs.readFileSync('dist/game.html','utf8');
             const loader=hosted.match(/<script>(if\(new URLSearchParams[\s\S]*?)<\/script>/)[1];
