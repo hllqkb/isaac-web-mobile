@@ -29,8 +29,9 @@ const root = document.createElement('div'); root.id = 'isaac-diagnostics';
 root.innerHTML = `<button id="isaac-diagnostic-toggle" type="button" aria-label="打开运行诊断" aria-expanded="false" aria-controls="isaac-diagnostic-panel">诊断</button>
   <section id="isaac-diagnostic-panel" aria-label="运行诊断" hidden>
     <div class="diagnostic-heading"><h2>运行诊断</h2><button type="button" data-close>关闭</button></div>
-    <p data-status role="status"></p><dl></dl>
+    <p data-status role="status"></p>
     <div class="diagnostic-actions"><button type="button" data-download>下载报告</button><button type="button" data-copy>复制摘要</button><button type="button" data-previous>下载上次快照</button></div>
+    <dl></dl>
     <p>打开面板不会暂停游戏。报告仅保存在本机，不包含存档和 mod 文件内容。</p>
     <p data-result role="status"></p><textarea aria-label="诊断摘要，可手动复制" readonly hidden></textarea>
   </section>`;
@@ -71,11 +72,12 @@ function status() {
   return '画面帧正在推进';
 }
 function render() {
-  panel.querySelector('[data-status]').textContent = status();
+  const message=status(), statusField=panel.querySelector('[data-status]');
+  if (statusField.textContent!==message) statusField.textContent=message;
   const resource = current.resources, save = current.save;
   fields.get('画面帧数').textContent = `${current.frame ?? '尚未开始'} · 近段 ${current.framesPerSecond ?? '--'} 帧/秒`;
   fields.get('最近推进').textContent = `${(current.sinceAdvanceMs / 1000).toFixed(1)} 秒前`;
-  fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计），游戏更新与其解耦`;
+  fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计）`;
   fields.get('待取资源').textContent = resource ? `${resource.waiting} 个等待，${resource.active.length} 个下载\n${resource.active.map(x => `${x.key}: ${(x.received/1048576).toFixed(1)} MB，${x.fallback ? '备用源' : '主源'}`).join('\n')}` : '尚未初始化';
   fields.get('备用与失败').textContent = resource ? `备用 ${resource.fallbacks} · 超时 ${resource.timeouts} · 最终失败 ${resource.failures}` : '--';
   fields.get('待写存档').textContent = save ? `${save.pending ?? '--'} 个待写 · ${save.inFlight ?? 0} 个写入中${save.lastError ? ` · ${limit(save.lastError,180)}` : ''}` : '尚未初始化';
