@@ -58,6 +58,27 @@ def main() -> None:
     if count != 1 or 'https://cdn.jsdelivr.net/' in page:
         raise ValueError('Unbundled third-party resource dependency')
 
+    # Only the same-origin hosted build waits for complete, verified resources.
+    # The legacy CDN page and Android package keep their existing startup path.
+    hosted_manifest = re.search(r'window\.__isaacPortableData = (.*?);</script>', page, re.S)
+    if not hosted_manifest:
+        raise ValueError('Missing hosted preload manifest')
+    hosted_data = json.loads(hosted_manifest.group(1))
+    hosted_data['hostedFullCache'] = True
+    preload_script = "<script>window.isaacFullCacheReady=import('./web/preload.mjs').then(m=>m.prepareResources());</script>"
+    page = (page[:hosted_manifest.start(1)] + json.dumps(hosted_data)
+            + page[hosted_manifest.end(1):hosted_manifest.end()] + preload_script
+            + page[hosted_manifest.end():])
+    launch = '  document.body.appendChild(s);'
+    if page.count(launch) != 1:
+        raise ValueError('Game launch anchor changed')
+    page = page.replace(launch, """  window.isaacFullCacheReady.then(function () {
+    document.body.appendChild(s);
+  }).catch(function (error) {
+    document.getElementById('status').textContent = '资源准备模块加载失败，请刷新后重试。';
+    console.error('[isaac preload startup]', error);
+  });""")
+
     DEST.mkdir(exist_ok=True)
     if any(DEST.iterdir()):
         raise ValueError('Hosted output must start empty')
