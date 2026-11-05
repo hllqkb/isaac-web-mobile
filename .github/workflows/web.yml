@@ -637,7 +637,7 @@ jobs:
           assert re.search(module_pattern,hosted,re.S)[1]==re.search(module_pattern,original,re.S)[1],'Game modules changed'
           assert 'window.isaacModCatalogue = null;' in hosted
           assert './web/diagnostics.mjs' in hosted
-          gate=hosted.index("window.isaacFullCacheReady=new Promise")
+          gate=hosted.index("<script>if(new URLSearchParams")
           assert hosted.index('window.__isaacPortableData =') < gate < hosted.index('var P = window.__isaacPortableData')
           assert 'if (P.hostedFullCache) await window.isaacFullCacheReady;' in hosted
           assert hosted.index('window.isaacFullCacheReady.then(function () {') < hosted.index('document.body.appendChild(s);')
@@ -699,7 +699,7 @@ jobs:
             assert.ok(report.warm.memoizedBlobs<=2&&report.warm.memoizedBytes<=40*1048576);
             console.log('COMPLETE 38-CHUNK CACHE VERIFIED; WARM PRELOAD AND B14/B20 RANGES MAKE ZERO NETWORK REQUESTS',JSON.stringify(report));
             const hosted=fs.readFileSync('dist/game.html','utf8');
-            const loader=hosted.match(/<script>(window\.isaacFullCacheReady=new Promise[\s\S]*?)<\/script>/)[1];
+            const loader=hosted.match(/<script>(if\(new URLSearchParams[\s\S]*?)<\/script>/)[1];
             for(const failure of ['entry','dependency']){
               const retryPage=await browser.newPage();let entryRequests=0;
               const fixture='<script>window.__isaacPortableData={hostedFullCache:true};window.__launched=false;</script><script>'+loader+'</script><script>window.isaacFullCacheReady.then(()=>{window.__launched=true;});</script>';
@@ -724,6 +724,20 @@ jobs:
               }
               console.log('PRELOAD IMPORT FAILURE RECOVERS BEFORE GAME LAUNCH',failure);
               await retryPage.close();
+            }
+            for(const query of ['preload=off','preload=off&framepacer=off']){
+              const bypass=await browser.newPage();let imports=0;
+              const fixture='<script>window.__isaacPortableData={hostedFullCache:true};window.__launched=false;</script><script>'+loader+'</script><script>window.isaacFullCacheReady.then(()=>{window.__launched=true;});</script>';
+              await bypass.route('**/loader-fixture.html*',route=>route.fulfill({contentType:'text/html',body:fixture}));
+              await bypass.route('**/web/preload.mjs',route=>{imports++;return route.abort();});
+              await bypass.goto('http://127.0.0.1:8767/loader-fixture.html?'+query);
+              await bypass.waitForFunction(()=>window.__launched);
+              assert.equal(imports,0);
+              assert.ok(await bypass.evaluate(()=>__isaacPortableData.hostedFullCache===false&&isaacFullChunkCache===null));
+              assert.equal(await bypass.locator('[data-preload-loader-error]').count(),0);
+              assert.equal(await bypass.evaluate(()=>new URLSearchParams(location.search).get('framepacer')),query.includes('framepacer=off')?'off':null);
+              console.log('PRELOAD BYPASS DOES NOT IMPORT OR BLOCK LAUNCH; PACING QUERY PRESERVED',query);
+              await bypass.close();
             }
           }finally{await browser.close();}
           JS
