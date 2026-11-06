@@ -120,14 +120,15 @@ jobs:
           {
             // Run guard: a run saved with mods stays out of the game when any of those mods will not load.
             const bootWeb=modules['boot_web.mjs'];
-            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
+            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns,setModEnabled as setModEnabledForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
               assert.equal(bootWeb.split(piece).length,2,'Run guard piece missing or repeated: '+piece);
             const check=bootWeb.indexOf('runGuard.useMods('),restore=bootWeb.indexOf("await stageOk('restore saves'"),seed=bootWeb.indexOf("await stageOk('seed mods'"),read=bootWeb.indexOf('const saved=await readSaves();');
             assert.ok(restore<check&&check<read&&read<seed,'Runs must be checked while saves are restored, before mods are seeded');
             const {createRunGuard,isRunState,loadableMods,LEGACY_RUN,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}=await import('./mobile/run_guard.mjs');
             assert.deepEqual(DEFAULT_OFF_MODS,['stats-plus']);
-            assert.ok(bootWeb.includes('if(mod&&mod.enabled!==false){await setModEnabled(modDb,id,false);'),'Default-off mods must be turned off before seeding');
-            assert.ok(bootWeb.indexOf('setModEnabled(modDb,id,false)')<bootWeb.indexOf('const r=await seedMods(modDb,seed,log,'),'Default-off must run before mods are seeded');
+            assert.ok(bootWeb.includes('const mod=await getModForRuns(db,id);if(!mod)continue;if(!markDefaultOff(id))continue;'),'Default-off must be recorded, for an installed mod, before switching');
+            assert.ok(bootWeb.includes('if(db)await applyDefaultOff(db);runGuard.useMods('),'Default-off must run before the expected mod set is read');
+            assert.ok(bootWeb.indexOf('if(modDb)await applyDefaultOff(modDb);')<bootWeb.indexOf('const r=await seedMods(modDb,seed,log,'),'Default-off fallback must run before mods are seeded');
             {
               const mem=new Map(),store={getItem:k=>mem.has(k)?mem.get(k):null,setItem:(k,v)=>mem.set(k,v)};
               assert.equal(defaultOffDue('stats-plus',store),true,'Owed on a fresh install');
@@ -135,6 +136,9 @@ jobs:
               assert.equal(defaultOffDue('stats-plus',store),false,'Never forced twice, so a player can turn it back on');
               assert.equal(defaultOffDue('stats-plus',{getItem(){throw Error('blocked')}}),false,'Without storage nothing is forced');
               assert.equal(defaultOffDue('stats-plus',null),false);
+              const readOnly={getItem:()=>null,setItem(){throw Error('quota')}};
+              assert.equal(markDefaultOff('stats-plus',readOnly),false,'A switch that cannot be remembered is reported as not stored');
+              assert.equal(markDefaultOff('stats-plus',{getItem:k=>'1',setItem(){}}),true);
             }
             assert.deepEqual(RETIRED_MODS,['drop-trinkets-faster']);
             assert.ok(bootWeb.indexOf('deleteModForRuns(modDb,id)')<bootWeb.indexOf('const r=await seedMods(modDb,seed,log,')&&bootWeb.indexOf('deleteModForRuns(modDb,id)')>bootWeb.indexOf("await stageOk('seed mods'"),'Retired mods must be removed in the seed stage, before seeding');

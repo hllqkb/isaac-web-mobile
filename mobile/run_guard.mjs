@@ -19,12 +19,14 @@ const retired = new Set(RETIRED_MODS);
 export const DEFAULT_OFF_MODS = ['stats-plus'];
 const notNeeded = new Set([...RETIRED_MODS, ...DEFAULT_OFF_MODS]);
 const DEFAULT_OFF_KEY = id => `isaac-default-off-v1:${id}`;
-// True only when the switch is still owed and can be remembered, so a player is never forced twice.
-export function defaultOffDue(id, storage = globalThis.localStorage) {
-  try { return !!storage && storage.getItem(DEFAULT_OFF_KEY(id)) === null; } catch { return false; }
+// Whether the one-time switch is still owed. Any storage failure means "not owed": nothing is forced.
+export function defaultOffDue(id, storage) {
+  try { const s = storage === undefined ? globalThis.localStorage : storage; return !!s && s.getItem(DEFAULT_OFF_KEY(id)) === null; } catch { return false; }
 }
-export function markDefaultOff(id, storage = globalThis.localStorage) {
-  try { storage.setItem(DEFAULT_OFF_KEY(id), String(Date.now())); } catch {}
+// Records the switch and says whether it was stored. Callers switch the mod off only after this
+// returns true, so a player whose browser cannot remember it is never forced off twice.
+export function markDefaultOff(id, storage) {
+  try { const s = storage === undefined ? globalThis.localStorage : storage; s.setItem(DEFAULT_OFF_KEY(id), String(Date.now())); return s.getItem(DEFAULT_OFF_KEY(id)) !== null; } catch { return false; }
 }
 
 // The mods seedMods will load, from the mod list alone: enabled, with files, within the
