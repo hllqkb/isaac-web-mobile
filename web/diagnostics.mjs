@@ -44,7 +44,7 @@ const result = root.querySelector('[data-result]');
 const previousButton = root.querySelector('[data-previous]');
 previousButton.disabled = !previous;
 const fields = new Map();
-for (const label of ['画面帧数', '最近推进', '刷新节奏', '帧率对照', '待取资源', '等待文件', '备用与失败', '待写存档', '最近错误', '上次快照']) {
+for (const label of ['画面帧数', '最近推进', '刷新节奏', '帧率对照', '引擎耗时', '显卡', '待取资源', '等待文件', '备用与失败', '待写存档', '最近错误', '上次快照']) {
   const term = document.createElement('dt'), value = document.createElement('dd');
   term.textContent = label; panel.querySelector('dl').append(term, value); fields.set(label, value);
 }
@@ -82,6 +82,9 @@ function render() {
   fields.get('最近推进').textContent = `${(current.sinceAdvanceMs / 1000).toFixed(1)} 秒前`;
   fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计）`;
   fields.get('帧率对照').textContent = current.pacingMode === 'original-yield' ? '新增限帧关闭（原始 yield）' : current.pacingMode === 'capped60' ? '新增限帧开启（默认）' : '尚未初始化';
+  const cost = current.engine;
+  fields.get('引擎耗时').textContent = cost?.frames ? `近 ${cost.frames} 帧 · 主线程占用 中位 ${cost.busyMs.p50} / P95 ${cost.busyMs.p95} / 最大 ${cost.busyMs.max} ms\n超过 16.7 ms ${cost.busyOver16} 帧，超过 33 ms ${cost.busyOver33} 帧\n等待画面 中位 ${cost.waitMs.p50} / P95 ${cost.waitMs.p95} ms · 绘制 中位 ${cost.drawCalls.p50} / P95 ${cost.drawCalls.p95} 次\n等待读文件 ${cost.fileWaitMs?.frames ?? 0} 帧，最长 ${cost.fileWaitMs?.max ?? 0} ms · 引擎主动等待 中位 ${cost.engineSleepMs?.p50 ?? 0} / P95 ${cost.engineSleepMs?.p95 ?? 0} ms（均不计入占用）` : '游戏中才统计';
+  fields.get('显卡').textContent = current.renderer || '未公开';
   fields.get('待取资源').textContent = resource ? `${resource.waiting} 个等待，${resource.active.length} 个下载\n${resource.active.map(x => `${x.key}: ${(x.received/1048576).toFixed(1)} MB，${x.fallback ? '备用源' : '主源'}`).join('\n')}` : '尚未初始化';
   fields.get('等待文件').textContent = current.reader ? `${current.reader.pendingReads} 个待完成 · 最久 ${(current.reader.oldestPendingMs/1000).toFixed(1)} 秒\n${current.reader.windows.map(x=>`${x.file} @ ${x.offset} + ${x.bytes}`).join('\n')}` : '尚未初始化';
   fields.get('备用与失败').textContent = resource ? `备用 ${resource.fallbacks} · 超时 ${resource.timeouts} · 最终失败 ${resource.failures}` : '--';
@@ -102,8 +105,21 @@ function measureRefresh(now) {
 }
 requestAnimationFrame(measureRefresh);
 
+let renderer;
+function readRenderer() {
+  if (renderer !== undefined) return renderer;
+  // Never create the game's context here: wait until the engine has drawn frames.
+  if (!(window.isaacFrame > 0)) return null;
+  try {
+    const gl = document.getElementById('canvas')?.getContext('webgl2');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    renderer = limit(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), 200);
+  } catch { renderer = null; }
+  return renderer;
+}
 function snapshot(details = false) {
-  return {format:'isaac-web-diagnostics/1',version:'2026-11-05-diagnostics',started,at:current.at,
+  return {format:'isaac-web-diagnostics/1',version:'2026-11-06-frame-cost',started,at:current.at,
     page:location.origin + location.pathname,userAgent:navigator.userAgent,
     viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},
     hardware:{cores:navigator.hardwareConcurrency,memoryGB:navigator.deviceMemory},
@@ -137,11 +153,12 @@ function sample() {
     sinceAdvanceMs:Math.round(now-advancedAt),sampleGapMs,maxVisibleSampleGapMs,hidden:document.hidden,focused:document.hasFocus(),
     done:window.isaacDone == null ? null : limit(window.isaacDone,1500),
     pacingMode:['capped60','original-yield'].includes(window.isaacPacingMode) ? window.isaacPacingMode : null,
-    resources:read('isaacResourceStats'),reader:read('isaacPendingReadStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
+    engine:read('isaacFrameCost'),renderer:readRenderer(),resources:read('isaacResourceStats'),reader:read('isaacPendingReadStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
     crash:crash ? {at:crash.at,title:limit(crash.title,256),error:limit(crash.error,2000)} : null};
   samples.push({at:current.at,frame,hidden:current.hidden,sampleGapMs,waiting:current.resources?.waiting ?? null,
     pendingReads:current.reader?.pendingReads ?? null,oldestPendingMs:current.reader?.oldestPendingMs ?? null,
-    received:current.resources?.active.reduce((n,x)=>n+x.received,0) ?? null,pending:current.save?.pending ?? null});
+    received:current.resources?.active.reduce((n,x)=>n+x.received,0) ?? null,pending:current.save?.pending ?? null,
+    busyP95:current.engine?.busyMs?.p95 ?? null,busyOver16:current.engine?.busyOver16 ?? null,drawsP50:current.engine?.drawCalls?.p50 ?? null});
   if (samples.length > 60) samples.shift();
   if (now-persistedAt>=5000) persist();
   if (opened) render();
@@ -167,7 +184,7 @@ panel.querySelector('[data-download]').addEventListener('click',()=>download(rep
 previousButton.addEventListener('click',()=>{if(previous)download(previous,'-previous');});
 panel.querySelector('[data-copy]').addEventListener('click',async()=>{
   sample();
-  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n节奏 ${current.pacingMode ?? '--'}\n资源 ${JSON.stringify(current.resources)}\n文件读取 ${JSON.stringify(current.reader)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
+  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n节奏 ${current.pacingMode ?? '--'}\n引擎 ${JSON.stringify(current.engine)}\n显卡 ${current.renderer ?? '--'}\n资源 ${JSON.stringify(current.resources)}\n文件读取 ${JSON.stringify(current.reader)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
   try {await navigator.clipboard.writeText(text);result.textContent='已复制简要诊断。';}
   catch {const field=panel.querySelector('textarea');field.hidden=false;field.value=text;field.focus();field.select();result.textContent='请长按或使用复制快捷键，复制下方摘要。';}
 });

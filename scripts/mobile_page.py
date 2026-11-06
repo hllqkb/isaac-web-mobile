@@ -56,10 +56,28 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
         "const load=()=>portable.bytesFor(q.rel,q.off,q.len);"
         "const bytes=q.rel==='resources/packed/sfx.a'&&!q.off&&!q.len?await readCachedSound(load):await load();")
     yield_end = 'return waited})}__asyncjs__isaac_yield_js.sig="id";'
-    if modules['boot.mjs'].count(yield_end) != 1:
+    yield_start = 'return Asyncify.handleAsync(async()=>{var waited=1;'
+    if modules['boot.mjs'].count(yield_end) != 1 or modules['boot.mjs'].count(yield_start) != 1:
         raise ValueError('Engine yield pacing insertion point changed')
-    modules['boot.mjs'] = modules['boot.mjs'].replace(yield_end,
-        'if(Module.isaacPaceFrame)await Module.isaacPaceFrame();' + yield_end)
+    # Diagnostics only: record main-thread time between yields and time spent waiting in one.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(yield_start,
+        yield_start + 'var isaacYieldAt=performance.now();').replace(yield_end,
+        'if(Module.isaacPaceFrame)await Module.isaacPaceFrame();'
+        'if(typeof window!=="undefined"&&window.isaacRecordFrame)window.isaacRecordFrame(work,isaacYieldAt,performance.now());'
+        + yield_end)
+    lazy_read = 'var n=Module.isaacLazyPread(s,dst,off,len);'
+    if modules['boot.mjs'].count(lazy_read) != 1:
+        raise ValueError('Lazy read timing insertion point changed')
+    # Diagnostics only: asynchronous file waits between yields are not main-thread work.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(lazy_read, lazy_read +
+        'if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);')
+    sleep = 'let innerFunc=()=>new Promise(resolve=>setTimeout(resolve,ms));'
+    if modules['boot.mjs'].count(sleep) != 1:
+        raise ValueError('Engine sleep timing insertion point changed')
+    # Diagnostics only: a native render-gate sleep is a wait, not main-thread work.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(sleep,
+        'let innerFunc=()=>{let slept=new Promise(resolve=>setTimeout(resolve,ms));'
+        'return typeof window!=="undefined"&&window.isaacTrackSleep?window.isaacTrackSleep(slept):slept};')
     config_anchor = 'const pads=createPads('
     if modules['boot_web.mjs'].count(config_anchor) != 1:
         raise ValueError('Engine frame clock configuration point changed')
@@ -95,7 +113,7 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
             raise ValueError(f'Touch direction insertion point changed: {before}')
         controls = controls.replace(before, after)
     controls = controls.replace('input.update();}\nfunction frameLoop()',
-                                "input.update();mobileButtons.update(mode);mobilePerformance.sample({...state,mode,running:run});}\nfunction frameLoop()")
+                                "input.update();mobileButtons.update(mode);mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});}\nfunction frameLoop()")
     # Preserve the upstream HUD, item bar and direct menu touch targets.
     # The native shell already fills the screen; a redundant HTML fullscreen
     # transition resets touch input during its first gameplay gesture.
