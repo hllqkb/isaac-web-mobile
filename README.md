@@ -4,7 +4,7 @@
 
 [开始游戏](https://isaac.hllqk.cn/) · [下载 Android APK](https://github.com/hllqkb/isaac-web-mobile/releases/download/v2026.11.05-r2/Isaac-Mobile-2026-11-05-r2.apk) · [版本与 Android 源码](https://github.com/hllqkb/isaac-web-mobile/releases/tag/v2026.11.05-r2)
 
-更新日期：2026-11-05。初始存档快照：2026-11-04。
+更新日期：2026-11-06。初始存档快照：2026-11-04。
 
 ## 界面与游戏画面
 
@@ -44,7 +44,7 @@
 
 ## 存档、mod 与操作
 
-预置 **3 个存档位、41 个已安装 mod，其中 35 个启用**，包含中文 EID 道具说明。完整名单见 [preset-info.json](preset-info.json)。可在游戏 MODS 菜单调整；之后的进度和设置保存在各自设备中。
+预置 **3 个存档位、41 个已安装 mod，其中 35 个启用**，包含中文 EID 道具说明。完整名单见 [preset-info.json](preset-info.json)。可在游戏 MODS 菜单调整；之后的进度和设置保存在各自设备中。关掉某个 mod 后，开着它时存下的“未打完的那局”会先收起来（不显示“继续游戏”，数据不删），重新打开这个 mod 后自动恢复；如果在收起期间开了新局，旧的那局会被覆盖。
 
 | 动作 | 电脑键盘 | 手机触控 |
 | --- | --- | --- |
