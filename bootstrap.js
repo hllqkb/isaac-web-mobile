@@ -232,7 +232,10 @@ try {
   document.querySelector('.stats strong').textContent = '3';
   // Mods the game page removes at boot (see mobile/run_guard.mjs RETIRED_MODS) are not offered here.
   const retiredNames = new Set(['drop trinkets faster']);
-  const offered = info.mod_names.filter(mod => !retiredNames.has(mod.name));
+  // Display-only mods the game page turns off once (see mobile/run_guard.mjs DEFAULT_OFF_MODS) start off.
+  const defaultOffNames = new Set(['Stats+']);
+  const offered = info.mod_names.filter(mod => !retiredNames.has(mod.name))
+    .map(mod => defaultOffNames.has(mod.name) ? {...mod, enabled: false} : mod);
   document.querySelectorAll('.stats strong')[1].textContent = offered.filter(mod => mod.enabled).length;
   for (const mod of offered) {
     const item = document.createElement('li');

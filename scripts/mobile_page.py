@@ -29,6 +29,10 @@ RUN_GUARD_PATCHES = (
     ('const r=await seedMods(modDb,seed,log,',
      'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);'
      'log(`  retired mod ${id} removed`);}}catch(e){log(`  retired mod ${id} not removed: ${e.message}`);}}'
+     # Display-only mods are turned off once per install; a player may turn them back on.
+     'if(modDb)for(const id of DEFAULT_OFF_MODS){try{if(defaultOffDue(id)){const mod=await getModForRuns(modDb,id);'
+     'if(mod&&mod.enabled!==false){await setModEnabled(modDb,id,false);log(`  ${id} turned off by default (it can be turned back on in MODS)`);}'
+     'markDefaultOff(id);}}catch(e){log(`  ${id} default-off skipped: ${e.message}`);}}'
      'const r=await seedMods(modDb,seed,log,'),
 )
 
@@ -38,7 +42,7 @@ def apply_run_guard(boot_web: str) -> str:
         if boot_web.count(before) != 1:
             raise ValueError(f'Run guard insertion point changed: {before}')
         boot_web = boot_web.replace(before, after)
-    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';"
+    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}from'./mobile_run_guard.mjs';"
             "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';"
             "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
 
