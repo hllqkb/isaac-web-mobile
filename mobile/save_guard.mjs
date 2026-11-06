@@ -17,7 +17,8 @@ export function createSaveWriter({database, queue, store}) {
             tx.onerror = () => {}; // onabort settles the failed transaction.
             const files = tx.objectStore(store);
             for (const file of batch) {
-              if (file.bytes) files.put({src:file.src, bytes:file.bytes}, file.key);
+              // A run save keeps the mods it was written with in the same record as its bytes.
+              if (file.bytes) files.put(file.mods ? {src:file.src, bytes:file.bytes, mods:file.mods} : {src:file.src, bytes:file.bytes}, file.key);
               else files.delete(file.key);
             }
           } catch (error) {
