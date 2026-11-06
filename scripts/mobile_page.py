@@ -66,6 +66,15 @@ def apply_callback_guard(boot_web: str) -> str:
         "m.FS.writeFile('/'+rel,fixed.bytes);}"))
 
 
+# Errors the glue records itself (GL.lastError) are still reported; only the GPU round trips go.
+GL_SYNC_PATCHES = (
+    ('var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;',
+     'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync?GLctx.getError():0)||GL.lastError;'),
+    ('var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);',
+     'var _emscripten_glCheckFramebufferStatus=x0=>Module.isaacGlSync?GLctx.checkFramebufferStatus(x0):36053;'),
+)
+
+
 def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     boot_cache_version = sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     modules_match = re.search(r'window\.__isaacModules = (.*?);</script>', page, re.S)
@@ -145,7 +154,16 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     modules['boot_web.mjs'] = "import{createFramePacer}from'./mobile_frame_clock.mjs';" + modules['boot_web.mjs'].replace(
         config_anchor, "const cappedFramePacer=params.get('framepacer')!=='off';"
         "cfg.isaacPaceFrame=cappedFramePacer?createFramePacer():null;"
-        "window.isaacPacingMode=cappedFramePacer?'capped60':'original-yield';" + config_anchor)
+        "window.isaacPacingMode=cappedFramePacer?'capped60':'original-yield';"
+        # The game asks WebGL for getError/checkFramebufferStatus several times a second; each call
+        # blocks the main thread until the GPU has finished all queued work (up to 12 ms on a phone,
+        # longest when an item pickup uploads large textures). Relaxed by default; ?glsync=on restores it.
+        "cfg.isaacGlSync=params.get('glsync')==='on';window.isaacGlSyncMode=cfg.isaacGlSync?'sync':'relaxed';"
+        + config_anchor)
+    for before, after in GL_SYNC_PATCHES:
+        if modules['boot.mjs'].count(before) != 1:
+            raise ValueError(f'GL sync insertion point changed: {before}')
+        modules['boot.mjs'] = modules['boot.mjs'].replace(before, after)
     controls = modules['touch_controls.mjs']
     controls = "import{createMobilePerformance}from'./mobile_performance.mjs';import{createMobileButtons}from'./mobile_buttons.mjs';" + controls
     input_anchor = 'const input=createTouchInput({readFrame:()=>state.frame,emit});'
