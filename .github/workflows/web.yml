@@ -124,7 +124,7 @@ jobs:
             assert.equal(gl.drawElements(),'ok');
             createMobilePerformance();
             const perf=createMobilePerformance();
-            gl.drawArrays();assert.equal(drawn,2);assert.equal(window.__isaacDrawCalls,2,'Draw counting wrapped twice');
+            gl.drawArrays();assert.equal(drawn,2);assert.equal(window.__isaacDrawCalls,1,'Draw counting missed a call or wrapped twice');
             const game={ready:true,running:true,paused:false,blocked:false,mode:'game',hidden:false,frame:1};
             window.isaacRecordFrame(9,0,5);
             assert.equal(window.isaacFrameCost().frames,0,'Recorded before gameplay was sampled');
