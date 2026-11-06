@@ -120,7 +120,7 @@ jobs:
           {
             // Run guard: a run saved with mods stays out of the game when any of those mods will not load.
             const bootWeb=modules['boot_web.mjs'];
-            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
+            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
               assert.equal(bootWeb.split(piece).length,2,'Run guard piece missing or repeated: '+piece);
             const check=bootWeb.indexOf('runGuard.useMods('),restore=bootWeb.indexOf("await stageOk('restore saves'"),seed=bootWeb.indexOf("await stageOk('seed mods'"),read=bootWeb.indexOf('const saved=await readSaves();');
             assert.ok(restore<check&&check<read&&read<seed,'Runs must be checked while saves are restored, before mods are seeded');
