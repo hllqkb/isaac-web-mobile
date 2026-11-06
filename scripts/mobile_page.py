@@ -25,6 +25,11 @@ RUN_GUARD_PATCHES = (
      'if(!d.restore){log(`  kept aside ${rel}: needs mods ${d.missing.join(\', \')}`);dropBody(bytes);continue;}'
      'if(d.stamp){persistPending.push({key,src,bytes:bytes.slice(),mods:runGuard.loaded()});flushSaves();}}'),
     ('persistPending.push({key,src,bytes});', 'persistPending.push({key,src,bytes,...runGuard.tag(key)});'),
+    # Retired mods are removed right before mods are seeded, whatever happened to the save store.
+    ('const r=await seedMods(modDb,seed,log,',
+     'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);'
+     'log(`  retired mod ${id} removed`);}}catch(e){log(`  retired mod ${id} not removed: ${e.message}`);}}'
+     'const r=await seedMods(modDb,seed,log,'),
 )
 
 
@@ -33,8 +38,8 @@ def apply_run_guard(boot_web: str) -> str:
         if boot_web.count(before) != 1:
             raise ValueError(f'Run guard insertion point changed: {before}')
         boot_web = boot_web.replace(before, after)
-    return ("import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';"
-            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';"
+    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';"
+            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';"
             "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
 
 
