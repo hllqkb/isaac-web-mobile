@@ -112,26 +112,6 @@ jobs:
           assert.ok(patchedYield.includes('await Module.isaacPaceFrame();'+frameCostEnd+'return waited})}'),'Frame cost end is not after pacing');
           assert.equal(patchedYield.replace('if(Module.isaacPaceFrame)await Module.isaacPaceFrame();','').replace(frameCostStart,'').replace(frameCostEnd,''),yieldText(registry(source)['boot.mjs']));
           console.log('DEFAULT AND EXPLICIT OFF PACING CONFIGURATION VERIFIED; PINNED YIELD UNCHANGED APART FROM PACING AND FRAME COST');
-          {
-            // GL sync: after start-up, getError skips the GPU round trip unless ?glsync=on.
-            const glPairs=[["var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;",'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync||!(typeof window!=="undefined"&&window.isaacFrame>600)?GLctx.getError():0)||GL.lastError;']];
-            assert.ok(modules['boot.mjs'].includes('var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);'),'checkFramebufferStatus must stay as shipped: faking it leaves the game canvas black');
-            const glSlice=(text,start)=>text.slice(text.indexOf(start),text.indexOf(';var ',text.indexOf(start)+start.length)+1);
-            for(const [before,after] of glPairs) {
-              assert.equal(modules['boot.mjs'].split(after).length,2,'GL sync patch missing or repeated: '+after);
-              assert.equal(registry(source)['boot.mjs'].split(before).length,2,'Upstream GL glue changed: '+before);
-              const name=before.slice(0,before.indexOf('='));
-              assert.equal(glSlice(modules['boot.mjs'],name).replace(after,before),glSlice(registry(source)['boot.mjs'],name),'GL glue changed beyond the switch: '+name);
-            }
-            const gl=modules['boot_web.mjs'].match(/cfg\.isaacGlSync=params\.get\('glsync'\)==='on';window\.isaacGlSyncMode=cfg\.isaacGlSync\?'sync':'relaxed';/);
-            assert.ok(gl,'GL sync switch not found');
-            const glConfigure=new Function('params','cfg','window',gl[0]);
-            for(const [query,mode,sync] of [['','relaxed',false],['glsync=on','sync',true],['glsync=off','relaxed',false],['glsync=1','relaxed',false]]) {
-              const cfg={},window={};glConfigure(new URLSearchParams(query),cfg,window);
-              assert.equal(window.isaacGlSyncMode,mode,query);assert.equal(cfg.isaacGlSync,sync,query);
-            }
-            console.log('GL SYNC SWITCH AND PINNED GLUE VERIFIED');
-          }
           const readTrack='if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);';
           const preadText=text=>text.slice(text.indexOf('function isaac_fs_lazy_pread_js('),text.indexOf('isaac_fs_lazy_pread_js.sig='));
           assert.equal(preadText(modules['boot.mjs']).replace(readTrack,''),preadText(registry(source)['boot.mjs']));

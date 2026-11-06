@@ -82,7 +82,6 @@ function render() {
   fields.get('最近推进').textContent = `${(current.sinceAdvanceMs / 1000).toFixed(1)} 秒前`;
   fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计）`;
   fields.get('帧率对照').textContent = current.pacingMode === 'original-yield' ? '新增限帧关闭（原始 yield）' : current.pacingMode === 'capped60' ? '新增限帧开启（默认）' : '尚未初始化';
-  if (current.glSyncMode) fields.get('帧率对照').textContent += current.glSyncMode === 'sync' ? '；显卡同步检查开启（glsync=on）' : '；显卡同步检查已省略（默认）';
   const cost = current.engine;
   fields.get('引擎耗时').textContent = cost?.frames ? `近 ${cost.frames} 帧 · 主线程占用 中位 ${cost.busyMs.p50} / P95 ${cost.busyMs.p95} / 最大 ${cost.busyMs.max} ms\n超过 16.7 ms ${cost.busyOver16} 帧，超过 33 ms ${cost.busyOver33} 帧\n等待画面 中位 ${cost.waitMs.p50} / P95 ${cost.waitMs.p95} ms · 绘制 中位 ${cost.drawCalls.p50} / P95 ${cost.drawCalls.p95} 次\n等待读文件 ${cost.fileWaitMs?.frames ?? 0} 帧，最长 ${cost.fileWaitMs?.max ?? 0} ms · 引擎主动等待 中位 ${cost.engineSleepMs?.p50 ?? 0} / P95 ${cost.engineSleepMs?.p95 ?? 0} ms（均不计入占用）` : '游戏中才统计';
   fields.get('显卡').textContent = current.renderer || '未公开';
@@ -154,7 +153,6 @@ function sample() {
     sinceAdvanceMs:Math.round(now-advancedAt),sampleGapMs,maxVisibleSampleGapMs,hidden:document.hidden,focused:document.hasFocus(),
     done:window.isaacDone == null ? null : limit(window.isaacDone,1500),
     pacingMode:['capped60','original-yield'].includes(window.isaacPacingMode) ? window.isaacPacingMode : null,
-    glSyncMode:['sync','relaxed'].includes(window.isaacGlSyncMode) ? window.isaacGlSyncMode : null,
     engine:read('isaacFrameCost'),renderer:readRenderer(),resources:read('isaacResourceStats'),reader:read('isaacPendingReadStats'),save:read('isaacSaveStats'),cache:read('isaacBootCacheStats'),
     crash:crash ? {at:crash.at,title:limit(crash.title,256),error:limit(crash.error,2000)} : null};
   samples.push({at:current.at,frame,hidden:current.hidden,sampleGapMs,waiting:current.resources?.waiting ?? null,
@@ -186,7 +184,7 @@ panel.querySelector('[data-download]').addEventListener('click',()=>download(rep
 previousButton.addEventListener('click',()=>{if(previous)download(previous,'-previous');});
 panel.querySelector('[data-copy]').addEventListener('click',async()=>{
   sample();
-  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n节奏 ${current.pacingMode ?? '--'}，显卡同步 ${current.glSyncMode ?? '--'}\n引擎 ${JSON.stringify(current.engine)}\n显卡 ${current.renderer ?? '--'}\n资源 ${JSON.stringify(current.resources)}\n文件读取 ${JSON.stringify(current.reader)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
+  const text = `以撒运行诊断 ${current.at}\n${status()}\n帧 ${current.frame}，近段 ${current.framesPerSecond ?? '--'} 帧/秒\n节奏 ${current.pacingMode ?? '--'}\n引擎 ${JSON.stringify(current.engine)}\n显卡 ${current.renderer ?? '--'}\n资源 ${JSON.stringify(current.resources)}\n文件读取 ${JSON.stringify(current.reader)}\n存档 ${JSON.stringify(current.save)}\n错误 ${errors.map(x=>x.text).join('\n')}\n${navigator.userAgent}`.slice(0,2200);
   try {await navigator.clipboard.writeText(text);result.textContent='已复制简要诊断。';}
   catch {const field=panel.querySelector('textarea');field.hidden=false;field.value=text;field.focus();field.select();result.textContent='请长按或使用复制快捷键，复制下方摘要。';}
 });
