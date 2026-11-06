@@ -13,6 +13,22 @@ export const isRunState = key => RUN_STATE.test(String(key));
 export const RETIRED_MODS = ['drop-trinkets-faster'];
 const retired = new Set(RETIRED_MODS);
 
+// Display-only preset mods turned off once on every install: Stats+ redraws its HUD every frame
+// and adds about 2.4 ms per frame on a phone, while changing no game content. A run never needs
+// them, and a player who turns one back on in the MODS menu keeps it on.
+export const DEFAULT_OFF_MODS = ['stats-plus'];
+const notNeeded = new Set([...RETIRED_MODS, ...DEFAULT_OFF_MODS]);
+const DEFAULT_OFF_KEY = id => `isaac-default-off-v1:${id}`;
+// Whether the one-time switch is still owed. Any storage failure means "not owed": nothing is forced.
+export function defaultOffDue(id, storage) {
+  try { const s = storage === undefined ? globalThis.localStorage : storage; return !!s && s.getItem(DEFAULT_OFF_KEY(id)) === null; } catch { return false; }
+}
+// Records the switch and says whether it was stored. Callers switch the mod off only after this
+// returns true, so a player whose browser cannot remember it is never forced off twice.
+export function markDefaultOff(id, storage) {
+  try { const s = storage === undefined ? globalThis.localStorage : storage; s.setItem(DEFAULT_OFF_KEY(id), String(Date.now())); return s.getItem(DEFAULT_OFF_KEY(id)) !== null; } catch { return false; }
+}
+
 // The mods seedMods will load, from the mod list alone: enabled, with files, within the
 // seeding budget, in listMods order. Saves are restored before mods, so the decision can
 // not wait for the seeding itself without moving runs behind thousands of mod files.
@@ -47,7 +63,7 @@ export function createRunGuard() {
         // An unrecorded run is only trusted when some mods load; with none it is the known crash.
         return have.size ? {restore: true, stamp: true, missing: []} : {restore: false, stamp: false, missing: [LEGACY_RUN]};
       }
-      const missing = mods.filter(id => !have.has(id) && !retired.has(id));
+      const missing = mods.filter(id => !have.has(id) && !notNeeded.has(id));
       return {restore: !missing.length, stamp: false, missing};
     },
     // Extra fields stored with a save write, so the record commits in the same transaction as the bytes.
