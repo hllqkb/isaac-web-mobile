@@ -115,7 +115,7 @@ jobs:
           {
             // GL sync: getError/checkFramebufferStatus skip the GPU round trip unless ?glsync=on.
             const glPairs=[["var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;","var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync?GLctx.getError():0)||GL.lastError;"],["var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);","var _emscripten_glCheckFramebufferStatus=x0=>Module.isaacGlSync?GLctx.checkFramebufferStatus(x0):36053;"]];
-            const glSlice=(text,start)=>text.slice(text.indexOf(start),text.indexOf(';var ',text.indexOf(start)+start.length));
+            const glSlice=(text,start)=>text.slice(text.indexOf(start),text.indexOf(';var ',text.indexOf(start)+start.length)+1);
             for(const [before,after] of glPairs) {
               assert.equal(modules['boot.mjs'].split(after).length,2,'GL sync patch missing or repeated: '+after);
               assert.equal(registry(source)['boot.mjs'].split(before).length,2,'Upstream GL glue changed: '+before);
