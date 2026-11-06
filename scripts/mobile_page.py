@@ -66,12 +66,13 @@ def apply_callback_guard(boot_web: str) -> str:
         "m.FS.writeFile('/'+rel,fixed.bytes);}"))
 
 
-# Errors the glue records itself (GL.lastError) are still reported; only the GPU round trips go.
+# The engine probes GPU support with glGetError while it starts up (answering "no error" there
+# leaves the screen black), so the real call is kept until 600 frames have been presented; after
+# that it only reports errors and the GPU round trip is skipped. Errors the glue records itself
+# (GL.lastError) are still returned. glCheckFramebufferStatus is left as shipped.
 GL_SYNC_PATCHES = (
     ('var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;',
-     'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync?GLctx.getError():0)||GL.lastError;'),
-    ('var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);',
-     'var _emscripten_glCheckFramebufferStatus=x0=>Module.isaacGlSync?GLctx.checkFramebufferStatus(x0):36053;'),
+     'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync||!(typeof window!=="undefined"&&window.isaacFrame>600)?GLctx.getError():0)||GL.lastError;'),
 )
 
 
@@ -155,9 +156,9 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
         config_anchor, "const cappedFramePacer=params.get('framepacer')!=='off';"
         "cfg.isaacPaceFrame=cappedFramePacer?createFramePacer():null;"
         "window.isaacPacingMode=cappedFramePacer?'capped60':'original-yield';"
-        # The game asks WebGL for getError/checkFramebufferStatus several times a second; each call
-        # blocks the main thread until the GPU has finished all queued work (up to 12 ms on a phone,
-        # longest when an item pickup uploads large textures). Relaxed by default; ?glsync=on restores it.
+        # During play the game calls glGetError about ten times a second; each call blocks the main
+        # thread until the GPU has finished all queued work (up to 12 ms on a phone, longest when an
+        # item pickup uploads large textures). Relaxed by default; ?glsync=on restores it.
         "cfg.isaacGlSync=params.get('glsync')==='on';window.isaacGlSyncMode=cfg.isaacGlSync?'sync':'relaxed';"
         + config_anchor)
     for before, after in GL_SYNC_PATCHES:
