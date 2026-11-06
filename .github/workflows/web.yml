@@ -90,7 +90,7 @@ jobs:
             const checked=spawnSync(process.execPath,['--check','--input-type=module'],{input:text,encoding:'utf8'});
             if(checked.status!==0)throw Error(name+': '+checked.stderr);
           }
-          for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery'])
+          for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery','run_guard'])
             if(modules['mobile_'+name+'.mjs']!==fs.readFileSync('mobile/'+name+'.mjs','utf8'))throw Error('Stale mobile module '+name);
           const pacing=modules['boot_web.mjs'].match(/const cappedFramePacer=params.get\('framepacer'\)!=='off';cfg.isaacPaceFrame=cappedFramePacer\?createFramePacer\(\):null;window.isaacPacingMode=cappedFramePacer\?'capped60':'original-yield';/);
           assert.ok(pacing,'Explicit pacing switch not found');
@@ -117,6 +117,40 @@ jobs:
           assert.equal(preadText(modules['boot.mjs']).replace(readTrack,''),preadText(registry(source)['boot.mjs']));
           const sleepText=text=>text.slice(text.indexOf('var _emscripten_sleep=function(ms){'),text.indexOf('_emscripten_sleep.isAsync=true;'));
           assert.equal(sleepText(modules['boot.mjs']).replace('let innerFunc=()=>{let slept=new Promise(resolve=>setTimeout(resolve,ms));return typeof window!=="undefined"&&window.isaacTrackSleep?window.isaacTrackSleep(slept):slept};','let innerFunc=()=>new Promise(resolve=>setTimeout(resolve,ms));'),sleepText(registry(source)['boot.mjs']));
+          {
+            // Run guard: a run saved with mods stays out of the game when any of those mods will not load.
+            const bootWeb=modules['boot_web.mjs'];
+            for(const piece of ["import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';",'mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
+              assert.equal(bootWeb.split(piece).length,2,'Run guard piece missing or repeated: '+piece);
+            const check=bootWeb.indexOf('runGuard.useMods('),restore=bootWeb.indexOf("await stageOk('restore saves'"),seed=bootWeb.indexOf("await stageOk('seed mods'"),read=bootWeb.indexOf('const saved=await readSaves();');
+            assert.ok(restore<check&&check<read&&read<seed,'Runs must be checked while saves are restored, before mods are seeded');
+            const {createRunGuard,isRunState,loadableMods,LEGACY_RUN}=await import('./mobile/run_guard.mjs');
+            for(const [key,run] of [['c:/isaac/documents/my games/binding of isaac repentance+/gamestate1.dat',true],['gamestate12.dat',true],['GameState3.DAT',true],['persistentgamedata1.dat',false],['c:/isaac/data/eid/save1.dat',false],['gamestate1.dat.bak',false]])
+              assert.equal(isRunState(key),run,key);
+            // Same rules as seedMods: enabled, has files, within the budget in list order.
+            assert.deepEqual(loadableMods([{id:'b',enabled:true,files:2,bytes:40},{id:'off',enabled:false,files:1,bytes:1},{id:'empty',enabled:true,files:0,bytes:0},{id:'big',enabled:true,files:1,bytes:70},{id:'a',enabled:true,files:1,bytes:50}],100),['a','b']);
+            const cases={
+              'legacy run with mods expected is restored and stamped':{use:['a'],mods:undefined,want:{restore:true,stamp:true,missing:[]}},
+              'legacy run with no mods expected is kept aside':{use:[],mods:undefined,want:{restore:false,stamp:false,missing:[LEGACY_RUN]}},
+              'run recorded without mods is restored with none expected':{use:[],mods:[],want:{restore:true,stamp:false,missing:[]}},
+              'recorded mods all expected':{use:['c','a','b'],mods:['a','b'],want:{restore:true,stamp:false,missing:[]}},
+              'recorded mod turned off':{use:['a'],mods:['a','b'],want:{restore:false,stamp:false,missing:['b']}},
+              'unreadable mod list restores as before':{use:null,mods:['a','b'],want:{restore:true,stamp:false,missing:[]}},
+              'unreadable mod list does not stamp legacy runs':{use:null,mods:undefined,want:{restore:true,stamp:false,missing:[]}},
+            };
+            for(const [name,c] of Object.entries(cases)) {
+              const guard=createRunGuard();guard.useMods(c.use);
+              assert.deepEqual(guard.decide(c.mods),c.want,name);
+            }
+            const tagging=createRunGuard();
+            assert.deepEqual(tagging.tag('gamestate2.dat'),{},'A run written before the check must stay unrecorded');
+            tagging.useMods(['b','a','a']);
+            assert.deepEqual(tagging.tag('gamestate2.dat'),{mods:['a','b']});
+            assert.deepEqual(tagging.tag('persistentgamedata2.dat'),{});
+            tagging.loaded().push('x');tagging.tag('gamestate2.dat').mods.push('y');
+            assert.deepEqual(tagging.tag('gamestate2.dat'),{mods:['a','b']},'Callers must not change what later saves record');
+            console.log('RUN GUARD DECISIONS AND BOOT ORDER VERIFIED');
+          }
           assert.ok(modules['touch_controls.mjs'].includes("mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});"),'Desktop gameplay is not sampled');
           {
             // Frame cost recorder: only valid gameplay intervals count, pauses never become busy time.
@@ -635,6 +669,18 @@ jobs:
             if(!saved.failed||saved.count!==0||saved.retained.pending!==2||saved.value[0]!==2||saved.complete.pending!==0)
               throw Error('Aborted save did not retain the newest write: '+JSON.stringify(saved));
             console.log('ABORTED SAVE RETAINED AND RETRIED',saved);
+            const tagged=await page.evaluate(async()=>{
+              const {createSaveWriter}=await import('/mobile/save_guard.mjs');
+              const db=await new Promise((resolve,reject)=>{const q=indexedDB.open('ci-run-record',1);q.onupgradeneeded=()=>q.result.createObjectStore('files');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
+              const queue=[{key:'gamestate1.dat',src:'',bytes:new Uint8Array([7]),mods:['eid']},{key:'persistentgamedata1.dat',src:'',bytes:new Uint8Array([8])}];
+              await createSaveWriter({store:'files',queue,database:()=>db}).flush();
+              const get=key=>new Promise(resolve=>{const q=db.transaction('files').objectStore('files').get(key);q.onsuccess=()=>resolve(q.result)});
+              const run=await get('gamestate1.dat'),other=await get('persistentgamedata1.dat');db.close();
+              return{runMods:run.mods,runBytes:Array.from(run.bytes),otherHasMods:'mods' in other};
+            });
+            if(JSON.stringify(tagged.runMods)!=='["eid"]'||tagged.runBytes[0]!==7||tagged.otherHasMods)
+              throw Error('Run save did not keep its mods in the same record: '+JSON.stringify(tagged));
+            console.log('RUN SAVE STORES ITS MODS WITH ITS BYTES',tagged);
             await context.close();
             if(errors.length)throw Error('Browser errors: '+errors.join('\n'));
           } finally {

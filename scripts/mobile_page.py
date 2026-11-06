@@ -6,6 +6,37 @@ from pathlib import Path
 import re
 from typing import Any
 
+# A run saved with mods aborts the game once those mods are gone. While saves are restored
+# (before mods are seeded, as before), each run save is checked against the mods the mod list
+# says will load; a run that needs a missing mod stays in the store and out of the game.
+RUN_GUARD_CHECK = (
+    "if(!modsOn)runGuard.useMods([]);else{try{const db=await openModDbForRuns();"
+    "try{runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
+    "catch(e){runGuard.useMods(null);log(`  run check: mod list unavailable (${e.message}); runs restored as before`);}}"
+    "log(`  run check: ${runGuard.loaded()?.length??'unknown'} mod(s) expected to load`);"
+)
+RUN_GUARD_PATCHES = (
+    ('out.push({key:c.key,src:c.value.src,bytes:c.value.bytes});',
+     'out.push({key:c.key,src:c.value.src,bytes:c.value.bytes,mods:c.value.mods});'),
+    ('const saved=await readSaves();', RUN_GUARD_CHECK + 'const saved=await readSaves();'),
+    ('for(const{key,src,bytes}of saved){const rel=src||key;',
+     'for(const{key,src,bytes,mods}of saved){const rel=src||key;'
+     'if(isRunState(key)){const d=runGuard.decide(mods);'
+     'if(!d.restore){log(`  kept aside ${rel}: needs mods ${d.missing.join(\', \')}`);dropBody(bytes);continue;}'
+     'if(d.stamp){persistPending.push({key,src,bytes:bytes.slice(),mods:runGuard.loaded()});flushSaves();}}'),
+    ('persistPending.push({key,src,bytes});', 'persistPending.push({key,src,bytes,...runGuard.tag(key)});'),
+)
+
+
+def apply_run_guard(boot_web: str) -> str:
+    for before, after in RUN_GUARD_PATCHES:
+        if boot_web.count(before) != 1:
+            raise ValueError(f'Run guard insertion point changed: {before}')
+        boot_web = boot_web.replace(before, after)
+    return ("import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';"
+            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';"
+            "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
+
 
 def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     boot_cache_version = sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -15,6 +46,7 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     modules = json.loads(modules_match.group(1))
     modules['mobile_save_guard.mjs'] = (module_dir / 'save_guard.mjs').read_text()
     modules['mobile_recovery.mjs'] = (module_dir / 'recovery.mjs').read_text()
+    modules['mobile_run_guard.mjs'] = (module_dir / 'run_guard.mjs').read_text()
     boot_web = modules['boot_web.mjs']
     flush_start = boot_web.index('function flushSaves(){')
     flush_end = boot_web.index('function readSaves(){', flush_start)
@@ -26,8 +58,8 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     stats = 'window.isaacSaveStats=()=>({persisted,unlinked,pending:persistPending.length});'
     if boot_web.count(stats) != 1:
         raise ValueError('Save commit statistics insertion point changed')
-    modules['boot_web.mjs'] = boot_web.replace(stats,
-        'window.isaacSaveStats=()=>({persisted,unlinked,...saveWriter.stats()});')
+    modules['boot_web.mjs'] = apply_run_guard(boot_web.replace(stats,
+        'window.isaacSaveStats=()=>({persisted,unlinked,...saveWriter.stats()});'))
     modules['play.mjs'] = ("import{installRecovery}from'./mobile_recovery.mjs';"
         "installRecovery({readState:()=>readTouchState()});" + modules['play.mjs'])
     error_anchor = 'errorShown=true;renderProgress();'
@@ -146,7 +178,7 @@ window.isaacAndroidPause = async()=>{
     order = 'var order = ["boot.mjs"'
     if page.count(order) != 1:
         raise ValueError('Inline module dependency order changed')
-    page = page.replace(order, 'var order = ["mobile_save_guard.mjs","mobile_recovery.mjs","mobile_performance.mjs","mobile_console.mjs","mobile_buttons.mjs","mobile_frame_clock.mjs","mobile_boot_cache.mjs","boot.mjs"', 1)
+    page = page.replace(order, 'var order = ["mobile_save_guard.mjs","mobile_run_guard.mjs","mobile_recovery.mjs","mobile_performance.mjs","mobile_console.mjs","mobile_buttons.mjs","mobile_frame_clock.mjs","mobile_boot_cache.mjs","boot.mjs"', 1)
     order_match = re.search(r'var order = (\[.*?\]);', page)
     if not order_match:
         raise ValueError('Missing module load order')
