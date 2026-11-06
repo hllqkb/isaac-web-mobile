@@ -105,8 +105,52 @@ jobs:
           // Removing the optional call must recover the exact pinned yield implementation.
           const yieldText=text=>text.slice(text.indexOf('function __asyncjs__isaac_yield_js(work)'),text.indexOf('__asyncjs__isaac_yield_js.sig="id";'));
           assert.ok(yieldText(modules['boot.mjs']).length>0);
-          assert.equal(yieldText(modules['boot.mjs']).replace('if(Module.isaacPaceFrame)await Module.isaacPaceFrame();',''),yieldText(registry(source)['boot.mjs']));
-          console.log('DEFAULT AND EXPLICIT OFF PACING CONFIGURATION VERIFIED; PINNED YIELD UNCHANGED');
+          const frameCostStart='var isaacYieldAt=performance.now();';
+          const frameCostEnd='if(typeof window!=="undefined"&&window.isaacRecordFrame)window.isaacRecordFrame(work,isaacYieldAt,performance.now());';
+          const patchedYield=yieldText(modules['boot.mjs']);
+          assert.ok(patchedYield.includes('{var waited=1;'+frameCostStart),'Frame cost start is not at yield entry');
+          assert.ok(patchedYield.includes('await Module.isaacPaceFrame();'+frameCostEnd+'return waited})}'),'Frame cost end is not after pacing');
+          assert.equal(patchedYield.replace('if(Module.isaacPaceFrame)await Module.isaacPaceFrame();','').replace(frameCostStart,'').replace(frameCostEnd,''),yieldText(registry(source)['boot.mjs']));
+          console.log('DEFAULT AND EXPLICIT OFF PACING CONFIGURATION VERIFIED; PINNED YIELD UNCHANGED APART FROM PACING AND FRAME COST');
+          {
+            // Frame cost recorder: only valid gameplay intervals count, pauses never become busy time.
+            const listeners=[];
+            globalThis.document={hidden:false,addEventListener:(type,fn)=>listeners.push(fn)};
+            globalThis.window=globalThis;
+            let drawn=0;
+            globalThis.WebGL2RenderingContext=class{drawElements(){drawn++;return 'ok';}drawArrays(){drawn++;}};
+            const {createMobilePerformance}=await import('./mobile/performance.mjs');
+            const gl=new WebGL2RenderingContext();
+            assert.equal(gl.drawElements(),'ok');
+            createMobilePerformance();
+            const perf=createMobilePerformance();
+            gl.drawArrays();assert.equal(drawn,2);assert.equal(window.__isaacDrawCalls,2,'Draw counting wrapped twice');
+            const game={ready:true,running:true,paused:false,blocked:false,mode:'game',hidden:false,frame:1};
+            window.isaacRecordFrame(9,0,5);
+            assert.equal(window.isaacFrameCost().frames,0,'Recorded before gameplay was sampled');
+            perf.sample(game);
+            window.isaacRecordFrame(9,100,104);
+            for(let i=0;i<3;i++)gl.drawElements();
+            window.isaacRecordFrame(12,124,130);
+            window.isaacRecordFrame(30,170,171);
+            let cost=window.isaacFrameCost();
+            assert.equal(cost.frames,2);
+            assert.deepEqual(cost.busyMs,{p50:20,p95:40,max:40});
+            assert.deepEqual(cost.waitMs,{p50:1,p95:6,max:6});
+            assert.deepEqual(cost.drawCalls,{p50:0,p95:3,max:3});
+            assert.equal(cost.busyOver16,2);assert.equal(cost.busyOver33,1);
+            perf.sample({...game,paused:true});
+            window.isaacRecordFrame(5,5000,5001);
+            perf.sample({...game,frame:2});
+            window.isaacRecordFrame(5,9000,9001);
+            assert.equal(window.isaacFrameCost().frames,2,'Paused time counted as engine work');
+            window.isaacRecordFrame(5,9010,9011);
+            cost=window.isaacFrameCost();
+            assert.equal(cost.frames,3);assert.equal(cost.busyMs.max,40);
+            assert.deepEqual(perf.summary().engine,cost);
+            perf.reset();assert.equal(window.isaacFrameCost().frames,0);
+            console.log('FRAME COST RECORDER VERIFIED: busy/wait/draw split, pause exclusion, reset');
+          }
           // Synthetic clock: this checks the JS pacer's call boundaries only.
           // Native render skips change the number of present/yield calls per game tick.
           // Do not infer NativeGameTick rate from the number of pace() calls.
@@ -602,6 +646,11 @@ jobs:
               const panel=page.locator('#isaac-diagnostic-panel');assert.ok(await panel.isVisible());
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'capped60');
               assert.ok((await panel.innerText()).includes('新增限帧开启（默认）'));
+              assert.ok((await panel.innerText()).includes('游戏中才统计'));
+              await page.evaluate(()=>{window.isaacFrameCost=()=>({frames:120,busyMs:{p50:9.5,p95:24.2,max:61},busyOver16:30,busyOver33:4,waitMs:{p50:6.1,p95:12},engineWorkMs:{p50:9,p95:23,max:60},drawCalls:{p50:72,p95:89,max:120}});isaacDiagnosticReport();});
+              assert.ok((await panel.innerText()).includes('主线程占用 中位 9.5 / P95 24.2 / 最大 61 ms'));
+              assert.ok((await panel.innerText()).includes('超过 16.7 ms 30 帧，超过 33 ms 4 帧'));
+              assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.engine.drawCalls.p95),89);
               await page.evaluate(()=>{window.isaacPacingMode='original-yield';isaacDiagnosticReport();});
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'original-yield');
               assert.ok((await panel.innerText()).includes('新增限帧关闭（原始 yield）'));

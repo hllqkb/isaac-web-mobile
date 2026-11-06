@@ -56,10 +56,15 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
         "const load=()=>portable.bytesFor(q.rel,q.off,q.len);"
         "const bytes=q.rel==='resources/packed/sfx.a'&&!q.off&&!q.len?await readCachedSound(load):await load();")
     yield_end = 'return waited})}__asyncjs__isaac_yield_js.sig="id";'
-    if modules['boot.mjs'].count(yield_end) != 1:
+    yield_start = 'return Asyncify.handleAsync(async()=>{var waited=1;'
+    if modules['boot.mjs'].count(yield_end) != 1 or modules['boot.mjs'].count(yield_start) != 1:
         raise ValueError('Engine yield pacing insertion point changed')
-    modules['boot.mjs'] = modules['boot.mjs'].replace(yield_end,
-        'if(Module.isaacPaceFrame)await Module.isaacPaceFrame();' + yield_end)
+    # Diagnostics only: record main-thread time between yields and time spent waiting in one.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(yield_start,
+        yield_start + 'var isaacYieldAt=performance.now();').replace(yield_end,
+        'if(Module.isaacPaceFrame)await Module.isaacPaceFrame();'
+        'if(typeof window!=="undefined"&&window.isaacRecordFrame)window.isaacRecordFrame(work,isaacYieldAt,performance.now());'
+        + yield_end)
     config_anchor = 'const pads=createPads('
     if modules['boot_web.mjs'].count(config_anchor) != 1:
         raise ValueError('Engine frame clock configuration point changed')
