@@ -65,6 +65,12 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
         'if(Module.isaacPaceFrame)await Module.isaacPaceFrame();'
         'if(typeof window!=="undefined"&&window.isaacRecordFrame)window.isaacRecordFrame(work,isaacYieldAt,performance.now());'
         + yield_end)
+    lazy_read = 'var n=Module.isaacLazyPread(s,dst,off,len);'
+    if modules['boot.mjs'].count(lazy_read) != 1:
+        raise ValueError('Lazy read timing insertion point changed')
+    # Diagnostics only: asynchronous file waits between yields are not main-thread work.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(lazy_read, lazy_read +
+        'if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);')
     config_anchor = 'const pads=createPads('
     if modules['boot_web.mjs'].count(config_anchor) != 1:
         raise ValueError('Engine frame clock configuration point changed')
@@ -100,7 +106,7 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
             raise ValueError(f'Touch direction insertion point changed: {before}')
         controls = controls.replace(before, after)
     controls = controls.replace('input.update();}\nfunction frameLoop()',
-                                "input.update();mobileButtons.update(mode);mobilePerformance.sample({...state,mode,running:run});}\nfunction frameLoop()")
+                                "input.update();mobileButtons.update(mode);mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});}\nfunction frameLoop()")
     # Preserve the upstream HUD, item bar and direct menu touch targets.
     # The native shell already fills the screen; a redundant HTML fullscreen
     # transition resets touch input during its first gameplay gesture.

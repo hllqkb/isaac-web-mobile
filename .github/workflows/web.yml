@@ -112,6 +112,10 @@ jobs:
           assert.ok(patchedYield.includes('await Module.isaacPaceFrame();'+frameCostEnd+'return waited})}'),'Frame cost end is not after pacing');
           assert.equal(patchedYield.replace('if(Module.isaacPaceFrame)await Module.isaacPaceFrame();','').replace(frameCostStart,'').replace(frameCostEnd,''),yieldText(registry(source)['boot.mjs']));
           console.log('DEFAULT AND EXPLICIT OFF PACING CONFIGURATION VERIFIED; PINNED YIELD UNCHANGED APART FROM PACING AND FRAME COST');
+          const readTrack='if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);';
+          const preadText=text=>text.slice(text.indexOf('function isaac_fs_lazy_pread_js('),text.indexOf('isaac_fs_lazy_pread_js.sig='));
+          assert.equal(preadText(modules['boot.mjs']).replace(readTrack,''),preadText(registry(source)['boot.mjs']));
+          assert.ok(modules['touch_controls.mjs'].includes("mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});"),'Desktop gameplay is not sampled');
           {
             // Frame cost recorder: only valid gameplay intervals count, pauses never become busy time.
             const listeners=[];
@@ -147,7 +151,19 @@ jobs:
             window.isaacRecordFrame(5,9010,9011);
             cost=window.isaacFrameCost();
             assert.equal(cost.frames,3);assert.equal(cost.busyMs.max,40);
-            assert.deepEqual(perf.summary().engine,cost);
+            {
+              // A 200 ms file wait between two yields is not main-thread busy time.
+              let clock=10000;const realNow=performance.now.bind(performance);performance.now=()=>clock;
+              let finish;const read=window.isaacTrackRead(new Promise(resolve=>{finish=resolve;}));
+              clock=10200;finish('bytes');assert.equal(await read,'bytes');
+              await assert.rejects(window.isaacTrackRead(Promise.reject(Error('read failed'))),/read failed/);
+              performance.now=realNow;
+              window.isaacRecordFrame(5,9011+230,9011+232);
+              const latest=window.isaacFrameCost();
+              assert.equal(latest.frames,4);assert.equal(latest.fileWaitMs.max,200);assert.equal(latest.fileWaitMs.frames,1);
+              assert.ok(Math.abs(latest.busyMs.max-40)<1e-9,'File wait counted as busy: '+JSON.stringify(latest.busyMs));
+            }
+            assert.deepEqual(perf.summary().engine,window.isaacFrameCost());
             perf.reset();assert.equal(window.isaacFrameCost().frames,0);
             console.log('FRAME COST RECORDER VERIFIED: busy/wait/draw split, pause exclusion, reset');
           }
@@ -647,9 +663,10 @@ jobs:
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'capped60');
               assert.ok((await panel.innerText()).includes('新增限帧开启（默认）'));
               assert.ok((await panel.innerText()).includes('游戏中才统计'));
-              await page.evaluate(()=>{window.isaacFrameCost=()=>({frames:120,busyMs:{p50:9.5,p95:24.2,max:61},busyOver16:30,busyOver33:4,waitMs:{p50:6.1,p95:12},engineWorkMs:{p50:9,p95:23,max:60},drawCalls:{p50:72,p95:89,max:120}});isaacDiagnosticReport();});
+              await page.evaluate(()=>{window.isaacFrameCost=()=>({frames:120,busyMs:{p50:9.5,p95:24.2,max:61},busyOver16:30,busyOver33:4,waitMs:{p50:6.1,p95:12},fileWaitMs:{p95:0,max:180,frames:2},engineWorkMs:{p50:9,p95:23,max:60},drawCalls:{p50:72,p95:89,max:120}});isaacDiagnosticReport();});
               assert.ok((await panel.innerText()).includes('主线程占用 中位 9.5 / P95 24.2 / 最大 61 ms'));
               assert.ok((await panel.innerText()).includes('超过 16.7 ms 30 帧，超过 33 ms 4 帧'));
+              assert.ok((await panel.innerText()).includes('等待读文件 2 帧，最长 180 ms'));
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.engine.drawCalls.p95),89);
               await page.evaluate(()=>{window.isaacPacingMode='original-yield';isaacDiagnosticReport();});
               assert.equal(await page.evaluate(()=>isaacDiagnosticReport().current.pacingMode),'original-yield');

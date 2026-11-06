@@ -21,12 +21,19 @@ export function createMobilePerformance() {
   // Engine cost per yield: main-thread time between yields, time spent waiting in
   // the yield (vsync, pacer, other tasks) and draw calls issued in between.
   const COST = 600;
-  const busy = new Float64Array(COST), wait = new Float64Array(COST), work = new Float64Array(COST), draws = new Float64Array(COST);
-  let costCursor = 0, costCount = 0, costActive = false, lastExit = null, drawsAtExit = 0;
+  const busy = new Float64Array(COST), wait = new Float64Array(COST), work = new Float64Array(COST), draws = new Float64Array(COST), reads = new Float64Array(COST);
+  let costCursor = 0, costCount = 0, costActive = false, lastExit = null, drawsAtExit = 0, readMs = 0, readsAtExit = 0;
   countDrawCalls();
+  // The engine awaits one file read at a time; that wait yields the main thread.
+  window.isaacTrackRead = pending => {
+    const started = performance.now();
+    const done = () => { readMs += performance.now() - started; };
+    return Promise.resolve(pending).then(value => { done(); return value; }, error => { done(); throw error; });
+  };
   function recordFrame(engineWork, enteredAt, exitedAt) {
     if (costActive && lastExit !== null && enteredAt >= lastExit && exitedAt >= enteredAt) {
-      busy[costCursor] = enteredAt - lastExit;
+      reads[costCursor] = readMs - readsAtExit;
+      busy[costCursor] = Math.max(0, enteredAt - lastExit - reads[costCursor]);
       wait[costCursor] = exitedAt - enteredAt;
       work[costCursor] = Number.isFinite(engineWork) ? engineWork : NaN;
       draws[costCursor] = drawCalls() - drawsAtExit;
@@ -35,6 +42,7 @@ export function createMobilePerformance() {
     }
     lastExit = costActive ? exitedAt : null;
     drawsAtExit = drawCalls();
+    readsAtExit = readMs;
   }
   window.isaacRecordFrame = recordFrame;
 
@@ -75,13 +83,14 @@ export function createMobilePerformance() {
       const at = fraction => sorted.length ? rounded(sorted[Math.ceil(sorted.length * fraction) - 1]) : null;
       return {p50: at(0.5), p95: at(0.95), max: sorted.length ? rounded(sorted[sorted.length - 1]) : null, sorted};
     };
-    const b = stats(busy), w = stats(wait), e = stats(work), d = stats(draws);
+    const b = stats(busy), w = stats(wait), e = stats(work), d = stats(draws), r = stats(reads);
     return {
       frames: costCount,
       busyMs: {p50: b.p50, p95: b.p95, max: b.max},
       busyOver16: b.sorted.filter(value => value > 1000 / 60).length,
       busyOver33: b.sorted.filter(value => value > 1000 / 30).length,
       waitMs: {p50: w.p50, p95: w.p95, max: w.max},
+      fileWaitMs: {p95: r.p95, max: r.max, frames: r.sorted.filter(value => value > 0.5).length},
       engineWorkMs: {p50: e.p50, p95: e.p95, max: e.max},
       drawCalls: {p50: d.p50, p95: d.p95, max: d.max},
     };

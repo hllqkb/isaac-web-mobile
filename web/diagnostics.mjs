@@ -83,7 +83,7 @@ function render() {
   fields.get('刷新节奏').textContent = `${current.refreshHz ?? '--'} Hz（浏览器回调估计）`;
   fields.get('帧率对照').textContent = current.pacingMode === 'original-yield' ? '新增限帧关闭（原始 yield）' : current.pacingMode === 'capped60' ? '新增限帧开启（默认）' : '尚未初始化';
   const cost = current.engine;
-  fields.get('引擎耗时').textContent = cost?.frames ? `近 ${cost.frames} 帧 · 主线程占用 中位 ${cost.busyMs.p50} / P95 ${cost.busyMs.p95} / 最大 ${cost.busyMs.max} ms\n超过 16.7 ms ${cost.busyOver16} 帧，超过 33 ms ${cost.busyOver33} 帧\n等待画面 中位 ${cost.waitMs.p50} / P95 ${cost.waitMs.p95} ms · 绘制 中位 ${cost.drawCalls.p50} / P95 ${cost.drawCalls.p95} 次` : '游戏中才统计';
+  fields.get('引擎耗时').textContent = cost?.frames ? `近 ${cost.frames} 帧 · 主线程占用 中位 ${cost.busyMs.p50} / P95 ${cost.busyMs.p95} / 最大 ${cost.busyMs.max} ms\n超过 16.7 ms ${cost.busyOver16} 帧，超过 33 ms ${cost.busyOver33} 帧\n等待画面 中位 ${cost.waitMs.p50} / P95 ${cost.waitMs.p95} ms · 绘制 中位 ${cost.drawCalls.p50} / P95 ${cost.drawCalls.p95} 次\n等待读文件 ${cost.fileWaitMs?.frames ?? 0} 帧，最长 ${cost.fileWaitMs?.max ?? 0} ms（不计入占用）` : '游戏中才统计';
   fields.get('显卡').textContent = current.renderer || '未公开';
   fields.get('待取资源').textContent = resource ? `${resource.waiting} 个等待，${resource.active.length} 个下载\n${resource.active.map(x => `${x.key}: ${(x.received/1048576).toFixed(1)} MB，${x.fallback ? '备用源' : '主源'}`).join('\n')}` : '尚未初始化';
   fields.get('等待文件').textContent = current.reader ? `${current.reader.pendingReads} 个待完成 · 最久 ${(current.reader.oldestPendingMs/1000).toFixed(1)} 秒\n${current.reader.windows.map(x=>`${x.file} @ ${x.offset} + ${x.bytes}`).join('\n')}` : '尚未初始化';
