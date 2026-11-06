@@ -66,10 +66,10 @@ def apply_callback_guard(boot_web: str) -> str:
         "m.FS.writeFile('/'+rel,fixed.bytes);}"))
 
 
-# The engine probes GPU support with glGetError while it starts up (answering "no error" there
-# leaves the screen black), so the real call is kept until 600 frames have been presented; after
-# that it only reports errors and the GPU round trip is skipped. Errors the glue records itself
-# (GL.lastError) are still returned. glCheckFramebufferStatus is left as shipped.
+# glGetError skips its GPU round trip once 600 frames have been presented (start-up keeps the
+# real call as a margin). Errors the glue records itself (GL.lastError) are still returned.
+# glCheckFramebufferStatus is left as shipped: answering COMPLETE without asking leaves the game
+# canvas black (cloud screenshots, 2026-11-06), while answering NO_ERROR for glGetError does not.
 GL_SYNC_PATCHES = (
     ('var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;',
      'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync||!(typeof window!=="undefined"&&window.isaacFrame>600)?GLctx.getError():0)||GL.lastError;'),

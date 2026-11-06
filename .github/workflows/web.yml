@@ -115,7 +115,7 @@ jobs:
           {
             // GL sync: after start-up, getError skips the GPU round trip unless ?glsync=on.
             const glPairs=[["var _emscripten_glGetError=()=>{var error=GLctx.getError()||GL.lastError;",'var _emscripten_glGetError=()=>{var error=(Module.isaacGlSync||!(typeof window!=="undefined"&&window.isaacFrame>600)?GLctx.getError():0)||GL.lastError;']];
-            assert.ok(modules['boot.mjs'].includes('var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);'),'checkFramebufferStatus must stay as shipped: faking it at boot leaves the screen black');
+            assert.ok(modules['boot.mjs'].includes('var _emscripten_glCheckFramebufferStatus=x0=>GLctx.checkFramebufferStatus(x0);'),'checkFramebufferStatus must stay as shipped: faking it leaves the game canvas black');
             const glSlice=(text,start)=>text.slice(text.indexOf(start),text.indexOf(';var ',text.indexOf(start)+start.length)+1);
             for(const [before,after] of glPairs) {
               assert.equal(modules['boot.mjs'].split(after).length,2,'GL sync patch missing or repeated: '+after);
