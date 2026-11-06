@@ -11,7 +11,8 @@ from typing import Any
 # says will load; a run that needs a missing mod stays in the store and out of the game.
 RUN_GUARD_CHECK = (
     "if(!modsOn)runGuard.useMods([]);else{try{const db=await openModDbForRuns();"
-    "try{runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
+    "try{if(db)for(const id of RETIRED_MODS)if(await getModForRuns(db,id)){await deleteModForRuns(db,id);log(`  retired mod ${id} removed`);}"
+    "runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
     "catch(e){runGuard.useMods(null);log(`  run check: mod list unavailable (${e.message}); runs restored as before`);}}"
     "log(`  run check: ${runGuard.loaded()?.length??'unknown'} mod(s) expected to load`);"
 )
@@ -33,8 +34,8 @@ def apply_run_guard(boot_web: str) -> str:
         if boot_web.count(before) != 1:
             raise ValueError(f'Run guard insertion point changed: {before}')
         boot_web = boot_web.replace(before, after)
-    return ("import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';"
-            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';"
+    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';"
+            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';"
             "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
 
 

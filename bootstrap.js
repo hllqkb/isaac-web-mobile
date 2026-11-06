@@ -230,8 +230,11 @@ try {
   if (!response.ok) throw new Error(`配置清单加载失败：HTTP ${response.status}`);
   info = await response.json();
   document.querySelector('.stats strong').textContent = '3';
-  document.querySelectorAll('.stats strong')[1].textContent = info.enabled_mods;
-  for (const mod of info.mod_names) {
+  // Mods the game page removes at boot (see mobile/run_guard.mjs RETIRED_MODS) are not offered here.
+  const retiredNames = new Set(['drop trinkets faster']);
+  const offered = info.mod_names.filter(mod => !retiredNames.has(mod.name));
+  document.querySelectorAll('.stats strong')[1].textContent = offered.filter(mod => mod.enabled).length;
+  for (const mod of offered) {
     const item = document.createElement('li');
     item.textContent = mod.name + (mod.enabled ? '' : '（关闭）');
     if (!mod.enabled) item.className = 'off';

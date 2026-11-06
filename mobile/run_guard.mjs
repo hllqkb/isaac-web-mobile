@@ -6,6 +6,13 @@ const RUN_STATE = /(^|\/)gamestate\d+\.dat$/i;
 export const LEGACY_RUN = '(saved before mods were recorded)';
 export const isRunState = key => RUN_STATE.test(String(key));
 
+// Preset mods removed from every install at boot. drop-trinkets-faster raises a Lua error in
+// MC_POST_GAME_STARTED when a slot has no data of its own, and the port cannot survive an error
+// inside a mod callback (vcruntime140.dll!_CxxThrowException is not implemented). Runs recorded
+// while a retired mod was loaded do not need it back.
+export const RETIRED_MODS = ['drop-trinkets-faster'];
+const retired = new Set(RETIRED_MODS);
+
 // The mods seedMods will load, from the mod list alone: enabled, with files, within the
 // seeding budget, in listMods order. Saves are restored before mods, so the decision can
 // not wait for the seeding itself without moving runs behind thousands of mod files.
@@ -13,7 +20,7 @@ export function loadableMods(records, budget) {
   const ids = [];
   let used = 0;
   for (const mod of records) {
-    if (mod.enabled === false || !(mod.files > 0)) continue;
+    if (mod.enabled === false || !(mod.files > 0) || retired.has(mod.id)) continue;
     const size = mod.bytes || 0;
     if (used + size > budget) continue;
     used += size;
@@ -40,7 +47,7 @@ export function createRunGuard() {
         // An unrecorded run is only trusted when some mods load; with none it is the known crash.
         return have.size ? {restore: true, stamp: true, missing: []} : {restore: false, stamp: false, missing: [LEGACY_RUN]};
       }
-      const missing = mods.filter(id => !have.has(id));
+      const missing = mods.filter(id => !have.has(id) && !retired.has(id));
       return {restore: !missing.length, stamp: false, missing};
     },
     // Extra fields stored with a save write, so the record commits in the same transaction as the bytes.
