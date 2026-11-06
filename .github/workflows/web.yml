@@ -90,7 +90,7 @@ jobs:
             const checked=spawnSync(process.execPath,['--check','--input-type=module'],{input:text,encoding:'utf8'});
             if(checked.status!==0)throw Error(name+': '+checked.stderr);
           }
-          for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery','run_guard'])
+          for(const name of ['performance','console','buttons','frame_clock','boot_cache','save_guard','recovery','run_guard','script_fixes'])
             if(modules['mobile_'+name+'.mjs']!==fs.readFileSync('mobile/'+name+'.mjs','utf8'))throw Error('Stale mobile module '+name);
           const pacing=modules['boot_web.mjs'].match(/const cappedFramePacer=params.get\('framepacer'\)!=='off';cfg.isaacPaceFrame=cappedFramePacer\?createFramePacer\(\):null;window.isaacPacingMode=cappedFramePacer\?'capped60':'original-yield';/);
           assert.ok(pacing,'Explicit pacing switch not found');
@@ -154,6 +154,37 @@ jobs:
             tagging.loaded().push('x');tagging.tag('gamestate2.dat').mods.push('y');
             assert.deepEqual(tagging.tag('gamestate2.dat'),{mods:['a','b']},'Callers must not change what later saves record');
             console.log('RUN GUARD DECISIONS AND BOOT ORDER VERIFIED');
+          }
+          {
+            // Callback guard: main.lua calls mod callbacks through pcall, so a mod error is logged instead of ending the game.
+            const bootWeb=modules['boot_web.mjs'];
+            for(const piece of ["import{patchGameScript}from'./mobile_script_fixes.mjs';","patchGameScript(rel,await fetchBytes(`/instance/${rel}`),{enabled:params.get('callbackguard')!=='off'});","m.FS.writeFile('/'+rel,fixed.bytes);"])
+              assert.equal(bootWeb.split(piece).length,2,'Callback guard piece missing or repeated: '+piece);
+            const {patchGameScript,CALLBACK_GUARD_SCRIPT}=await import('./mobile/script_fixes.mjs');
+            const enc=t=>new TextEncoder().encode(t),dec=b=>new TextDecoder().decode(b);
+            const dispatch='function _RunCallback(callbackId, param, ...)\r\n\tlocal callbacks = Callbacks[callbackId]\r\n\t\t\t\tlocal result = v.Function(v.Mod, ...)\r\n';
+            const guarded=patchGameScript(CALLBACK_GUARD_SCRIPT,enc('-- head\r\n'+dispatch));
+            assert.equal(guarded.status,'guarded');
+            const text=dec(guarded.bytes);
+            assert.ok(text.includes('local ok, result = pcall(v.Function, v.Mod, ...) if not ok then _isaacWebReportCallbackError(callbackId, v.Mod, result) return nil end'),'Call not guarded, or a failed callback does not end the dispatch like the PC game');
+            assert.ok(/from mod " \.\. tostring\(mod and mod\.Name\)/.test(text),'The log must name the mod');
+            assert.ok(!text.includes('local result = v.Function(v.Mod, ...)'),'Unguarded call left behind');
+            assert.ok(text.indexOf('local function _isaacWebReportCallbackError')<text.indexOf('function _RunCallback('),'Reporter must be defined before dispatch');
+            assert.ok(/n <= 3 or n % 1000 == 0/.test(text),'Error log is not bounded');
+            assert.ok(/pcall\(function\(\) Isaac\.DebugString/.test(text),'Reporting an error must not raise one');
+            const cases={
+              'other scripts untouched':['resources/scripts/enums.lua',dispatch,{},'untouched'],
+              'switch off leaves main.lua as shipped':[CALLBACK_GUARD_SCRIPT,dispatch,{enabled:false},'off'],
+              'missing call is not patched':[CALLBACK_GUARD_SCRIPT,'function _RunCallback(callbackId, param, ...)\n',{},'unrecognised'],
+              'repeated call is not patched':[CALLBACK_GUARD_SCRIPT,dispatch+'local result = v.Function(v.Mod, ...)\n',{},'unrecognised'],
+              'invalid UTF-8 is written as shipped':[CALLBACK_GUARD_SCRIPT,null,{},'unrecognised'],
+            };
+            for(const [name,[rel,body,opts,status]] of Object.entries(cases)) {
+              const input=body===null?Uint8Array.from([...enc(dispatch),0xe9,0x0a]):enc(body),out=patchGameScript(rel,input,opts);
+              assert.equal(out.status,status,name);
+              if(status!=='guarded')assert.equal(out.bytes,input,name+': bytes must be returned untouched');
+            }
+            console.log('CALLBACK GUARD PATCH VERIFIED');
           }
           assert.ok(modules['touch_controls.mjs'].includes("mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});"),'Desktop gameplay is not sampled');
           {
