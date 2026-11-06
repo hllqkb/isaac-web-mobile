@@ -43,6 +43,19 @@ def apply_run_guard(boot_web: str) -> str:
             "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
 
 
+SCRIPT_WRITE = "m.FS.writeFile('/'+rel,await fetchBytes(`/instance/${rel}`));"
+
+
+def apply_callback_guard(boot_web: str) -> str:
+    # The game's main.lua is written to MEMFS with its mod callbacks called through pcall.
+    if boot_web.count(SCRIPT_WRITE) != 1:
+        raise ValueError('Lua script write insertion point changed')
+    return ("import{patchGameScript}from'./mobile_script_fixes.mjs';" + boot_web.replace(SCRIPT_WRITE,
+        "{const fixed=patchGameScript(rel,await fetchBytes(`/instance/${rel}`),{enabled:params.get('callbackguard')!=='off'});"
+        "if(fixed.status!=='untouched')log(`  ${rel}: callback guard ${fixed.status}`);"
+        "m.FS.writeFile('/'+rel,fixed.bytes);}"))
+
+
 def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     boot_cache_version = sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     modules_match = re.search(r'window\.__isaacModules = (.*?);</script>', page, re.S)
@@ -52,6 +65,7 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     modules['mobile_save_guard.mjs'] = (module_dir / 'save_guard.mjs').read_text()
     modules['mobile_recovery.mjs'] = (module_dir / 'recovery.mjs').read_text()
     modules['mobile_run_guard.mjs'] = (module_dir / 'run_guard.mjs').read_text()
+    modules['mobile_script_fixes.mjs'] = (module_dir / 'script_fixes.mjs').read_text()
     boot_web = modules['boot_web.mjs']
     flush_start = boot_web.index('function flushSaves(){')
     flush_end = boot_web.index('function readSaves(){', flush_start)
@@ -63,8 +77,8 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     stats = 'window.isaacSaveStats=()=>({persisted,unlinked,pending:persistPending.length});'
     if boot_web.count(stats) != 1:
         raise ValueError('Save commit statistics insertion point changed')
-    modules['boot_web.mjs'] = apply_run_guard(boot_web.replace(stats,
-        'window.isaacSaveStats=()=>({persisted,unlinked,...saveWriter.stats()});'))
+    modules['boot_web.mjs'] = apply_callback_guard(apply_run_guard(boot_web.replace(stats,
+        'window.isaacSaveStats=()=>({persisted,unlinked,...saveWriter.stats()});')))
     modules['play.mjs'] = ("import{installRecovery}from'./mobile_recovery.mjs';"
         "installRecovery({readState:()=>readTouchState()});" + modules['play.mjs'])
     error_anchor = 'errorShown=true;renderProgress();'
@@ -183,7 +197,7 @@ window.isaacAndroidPause = async()=>{
     order = 'var order = ["boot.mjs"'
     if page.count(order) != 1:
         raise ValueError('Inline module dependency order changed')
-    page = page.replace(order, 'var order = ["mobile_save_guard.mjs","mobile_run_guard.mjs","mobile_recovery.mjs","mobile_performance.mjs","mobile_console.mjs","mobile_buttons.mjs","mobile_frame_clock.mjs","mobile_boot_cache.mjs","boot.mjs"', 1)
+    page = page.replace(order, 'var order = ["mobile_save_guard.mjs","mobile_run_guard.mjs","mobile_script_fixes.mjs","mobile_recovery.mjs","mobile_performance.mjs","mobile_console.mjs","mobile_buttons.mjs","mobile_frame_clock.mjs","mobile_boot_cache.mjs","boot.mjs"', 1)
     order_match = re.search(r'var order = (\[.*?\]);', page)
     if not order_match:
         raise ValueError('Missing module load order')
