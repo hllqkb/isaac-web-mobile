@@ -11,7 +11,7 @@ from typing import Any
 # says will load; a run that needs a missing mod stays in the store and out of the game.
 RUN_GUARD_CHECK = (
     "if(!modsOn)runGuard.useMods([]);else{try{const db=await openModDbForRuns();"
-    "try{runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
+    "try{if(db)await applyDefaultOff(db);runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
     "catch(e){runGuard.useMods(null);log(`  run check: mod list unavailable (${e.message}); runs restored as before`);}}"
     "log(`  run check: ${runGuard.loaded()?.length??'unknown'} mod(s) expected to load`);"
 )
@@ -29,6 +29,8 @@ RUN_GUARD_PATCHES = (
     ('const r=await seedMods(modDb,seed,log,',
      'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);'
      'log(`  retired mod ${id} removed`);}}catch(e){log(`  retired mod ${id} not removed: ${e.message}`);}}'
+     # Fallback for boots whose run check could not open the mod list: the one-time switch is idempotent.
+     'if(modDb)await applyDefaultOff(modDb);'
      'const r=await seedMods(modDb,seed,log,'),
 )
 
@@ -38,9 +40,17 @@ def apply_run_guard(boot_web: str) -> str:
         if boot_web.count(before) != 1:
             raise ValueError(f'Run guard insertion point changed: {before}')
         boot_web = boot_web.replace(before, after)
-    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';"
-            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';"
-            "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
+    return ("import{createRunGuard,isRunState,loadableMods,RETIRED_MODS,DEFAULT_OFF_MODS,defaultOffDue,markDefaultOff}from'./mobile_run_guard.mjs';"
+            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns,"
+            "setModEnabled as setModEnabledForRuns}from'./mods.mjs';"
+            "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;"
+            # Display-only mods are turned off once per install, before the expected mod set is read.
+            # The switch is recorded first and only applied when the record was stored and the mod is
+            # installed, so a player who turns one back on keeps it.
+            "async function applyDefaultOff(db){for(const id of DEFAULT_OFF_MODS){try{if(!defaultOffDue(id))continue;"
+            "const mod=await getModForRuns(db,id);if(!mod)continue;if(!markDefaultOff(id))continue;"
+            "if(mod.enabled!==false){await setModEnabledForRuns(db,id,false);log(`  ${id} turned off by default (it can be turned back on in MODS)`);}}"
+            "catch(e){log(`  ${id} default-off skipped: ${e.message}`);}}}" + boot_web)
 
 
 SCRIPT_WRITE = "m.FS.writeFile('/'+rel,await fetchBytes(`/instance/${rel}`));"
