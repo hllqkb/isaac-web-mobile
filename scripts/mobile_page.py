@@ -71,6 +71,13 @@ def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
     # Diagnostics only: asynchronous file waits between yields are not main-thread work.
     modules['boot.mjs'] = modules['boot.mjs'].replace(lazy_read, lazy_read +
         'if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);')
+    sleep = 'let innerFunc=()=>new Promise(resolve=>setTimeout(resolve,ms));'
+    if modules['boot.mjs'].count(sleep) != 1:
+        raise ValueError('Engine sleep timing insertion point changed')
+    # Diagnostics only: a native render-gate sleep is a wait, not main-thread work.
+    modules['boot.mjs'] = modules['boot.mjs'].replace(sleep,
+        'let innerFunc=()=>{let slept=new Promise(resolve=>setTimeout(resolve,ms));'
+        'return typeof window!=="undefined"&&window.isaacTrackSleep?window.isaacTrackSleep(slept):slept};')
     config_anchor = 'const pads=createPads('
     if modules['boot_web.mjs'].count(config_anchor) != 1:
         raise ValueError('Engine frame clock configuration point changed')

@@ -115,6 +115,8 @@ jobs:
           const readTrack='if(n&&typeof n.then==="function"&&typeof window!=="undefined"&&window.isaacTrackRead)n=window.isaacTrackRead(n);';
           const preadText=text=>text.slice(text.indexOf('function isaac_fs_lazy_pread_js('),text.indexOf('isaac_fs_lazy_pread_js.sig='));
           assert.equal(preadText(modules['boot.mjs']).replace(readTrack,''),preadText(registry(source)['boot.mjs']));
+          const sleepText=text=>text.slice(text.indexOf('var _emscripten_sleep=function(ms){'),text.indexOf('_emscripten_sleep.isAsync=true;'));
+          assert.equal(sleepText(modules['boot.mjs']).replace('let innerFunc=()=>{let slept=new Promise(resolve=>setTimeout(resolve,ms));return typeof window!=="undefined"&&window.isaacTrackSleep?window.isaacTrackSleep(slept):slept};','let innerFunc=()=>new Promise(resolve=>setTimeout(resolve,ms));'),sleepText(registry(source)['boot.mjs']));
           assert.ok(modules['touch_controls.mjs'].includes("mobilePerformance.sample({...state,mode:mode==='off'&&run&&!state.paused?'game':mode,running:run});"),'Desktop gameplay is not sampled');
           {
             // Frame cost recorder: only valid gameplay intervals count, pauses never become busy time.
@@ -162,6 +164,14 @@ jobs:
               const latest=window.isaacFrameCost();
               assert.equal(latest.frames,4);assert.equal(latest.fileWaitMs.max,200);assert.equal(latest.fileWaitMs.frames,1);
               assert.ok(Math.abs(latest.busyMs.max-40)<1e-9,'File wait counted as busy: '+JSON.stringify(latest.busyMs));
+              // A 25 ms native sleep inside a 30 ms gap leaves 5 ms of busy time.
+              performance.now=()=>clock;
+              const nap=window.isaacTrackSleep(Promise.resolve());clock+=25;await nap;
+              performance.now=realNow;
+              window.isaacRecordFrame(5,9243+30,9243+31);
+              const slept=window.isaacFrameCost();
+              assert.equal(slept.frames,5);assert.equal(slept.engineSleepMs.max,25);
+              assert.equal(slept.busyMs.p50,20,'Native sleep counted as busy: '+JSON.stringify(slept.busyMs));
             }
             assert.deepEqual(perf.summary().engine,window.isaacFrameCost());
             perf.reset();assert.equal(window.isaacFrameCost().frames,0);
