@@ -120,14 +120,17 @@ jobs:
           {
             // Run guard: a run saved with mods stays out of the game when any of those mods will not load.
             const bootWeb=modules['boot_web.mjs'];
-            for(const piece of ["import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';",'mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
+            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
               assert.equal(bootWeb.split(piece).length,2,'Run guard piece missing or repeated: '+piece);
             const check=bootWeb.indexOf('runGuard.useMods('),restore=bootWeb.indexOf("await stageOk('restore saves'"),seed=bootWeb.indexOf("await stageOk('seed mods'"),read=bootWeb.indexOf('const saved=await readSaves();');
             assert.ok(restore<check&&check<read&&read<seed,'Runs must be checked while saves are restored, before mods are seeded');
-            const {createRunGuard,isRunState,loadableMods,LEGACY_RUN}=await import('./mobile/run_guard.mjs');
+            const {createRunGuard,isRunState,loadableMods,LEGACY_RUN,RETIRED_MODS}=await import('./mobile/run_guard.mjs');
+            assert.deepEqual(RETIRED_MODS,['drop-trinkets-faster']);
+            assert.ok(bootWeb.indexOf('deleteModForRuns(modDb,id)')<bootWeb.indexOf('const r=await seedMods(modDb,seed,log,')&&bootWeb.indexOf('deleteModForRuns(modDb,id)')>bootWeb.indexOf("await stageOk('seed mods'"),'Retired mods must be removed in the seed stage, before seeding');
             for(const [key,run] of [['c:/isaac/documents/my games/binding of isaac repentance+/gamestate1.dat',true],['gamestate12.dat',true],['GameState3.DAT',true],['persistentgamedata1.dat',false],['c:/isaac/data/eid/save1.dat',false],['gamestate1.dat.bak',false]])
               assert.equal(isRunState(key),run,key);
             // Same rules as seedMods: enabled, has files, within the budget in list order.
+            assert.deepEqual(loadableMods([{id:'drop-trinkets-faster',enabled:true,files:5,bytes:1},{id:'a',enabled:true,files:1,bytes:1}],100),['a'],'A retired mod is never expected to load');
             assert.deepEqual(loadableMods([{id:'b',enabled:true,files:2,bytes:40},{id:'off',enabled:false,files:1,bytes:1},{id:'empty',enabled:true,files:0,bytes:0},{id:'big',enabled:true,files:1,bytes:70},{id:'a',enabled:true,files:1,bytes:50}],100),['a','b']);
             const cases={
               'legacy run with mods expected is restored and stamped':{use:['a'],mods:undefined,want:{restore:true,stamp:true,missing:[]}},
@@ -135,6 +138,7 @@ jobs:
               'run recorded without mods is restored with none expected':{use:[],mods:[],want:{restore:true,stamp:false,missing:[]}},
               'recorded mods all expected':{use:['c','a','b'],mods:['a','b'],want:{restore:true,stamp:false,missing:[]}},
               'recorded mod turned off':{use:['a'],mods:['a','b'],want:{restore:false,stamp:false,missing:['b']}},
+              'a retired mod recorded with the run is not needed':{use:['a'],mods:['a','drop-trinkets-faster'],want:{restore:true,stamp:false,missing:[]}},
               'unreadable mod list restores as before':{use:null,mods:['a','b'],want:{restore:true,stamp:false,missing:[]}},
               'unreadable mod list does not stamp legacy runs':{use:null,mods:undefined,want:{restore:true,stamp:false,missing:[]}},
             };
