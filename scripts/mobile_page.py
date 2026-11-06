@@ -6,27 +6,24 @@ from pathlib import Path
 import re
 from typing import Any
 
-# A run saved with mods aborts the game once those mods are gone, so run saves are held back
-# while saves are restored and only handed to the game after the mods that actually loaded are known.
-RUN_GUARD_RESTORE = (
-    "await stageOk('restore runs',async()=>{const mods=runGuard.finish();"
-    "log(`  ${mods.length} mod(s) fully loaded for run checks`);let n=0;"
-    "for(const run of heldRuns.splice(0)){const d=runGuard.decide(run.mods);"
-    "if(!d.restore){log(`  kept aside ${run.rel}: needs mods ${d.missing.join(', ')}`);dropBody(run.bytes);continue;}"
-    "if(d.stamp){persistPending.push({key:run.key,src:run.src,bytes:run.bytes.slice(),mods});flushSaves();}"
-    "const size=run.bytes.length;let ok;try{ok=seedFile(run.rel,run.bytes);}finally{dropBody(run.bytes);}"
-    "if(ok)n+=1;log(`  restored ${run.rel} (${size} bytes) -> ${ok?'ok':'FAIL'}`);}return n;});"
+# A run saved with mods aborts the game once those mods are gone. While saves are restored
+# (before mods are seeded, as before), each run save is checked against the mods the mod list
+# says will load; a run that needs a missing mod stays in the store and out of the game.
+RUN_GUARD_CHECK = (
+    "if(!modsOn)runGuard.useMods([]);else{try{const db=await openModDbForRuns();"
+    "try{runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
+    "catch(e){runGuard.useMods(null);log(`  run check: mod list unavailable (${e.message}); runs restored as before`);}}"
+    "log(`  run check: ${runGuard.loaded()?.length??'unknown'} mod(s) expected to load`);"
 )
 RUN_GUARD_PATCHES = (
     ('out.push({key:c.key,src:c.value.src,bytes:c.value.bytes});',
      'out.push({key:c.key,src:c.value.src,bytes:c.value.bytes,mods:c.value.mods});'),
+    ('const saved=await readSaves();', RUN_GUARD_CHECK + 'const saved=await readSaves();'),
     ('for(const{key,src,bytes}of saved){const rel=src||key;',
      'for(const{key,src,bytes,mods}of saved){const rel=src||key;'
-     'if(isRunState(key)){heldRuns.push({key,src,rel,bytes,mods});continue;}'),
-    ('const seed=(path,bytes)=>{const ok=seedFile(path,bytes);if(ok)memfs(path,bytes);return!!ok;};',
-     'const seed=(path,bytes)=>{const ok=seedFile(path,bytes);runGuard.seeded(modOfSeed(path,underMods),!!ok);'
-     'if(ok)memfs(path,bytes);return!!ok;};'),
-    ("await stageOk('lua scripts into MEMFS'", RUN_GUARD_RESTORE + "await stageOk('lua scripts into MEMFS'"),
+     'if(isRunState(key)){const d=runGuard.decide(mods);'
+     'if(!d.restore){log(`  kept aside ${rel}: needs mods ${d.missing.join(\', \')}`);dropBody(bytes);continue;}'
+     'if(d.stamp){persistPending.push({key,src,bytes:bytes.slice(),mods:runGuard.loaded()});flushSaves();}}'),
     ('persistPending.push({key,src,bytes});', 'persistPending.push({key,src,bytes,...runGuard.tag(key)});'),
 )
 
@@ -36,8 +33,9 @@ def apply_run_guard(boot_web: str) -> str:
         if boot_web.count(before) != 1:
             raise ValueError(f'Run guard insertion point changed: {before}')
         boot_web = boot_web.replace(before, after)
-    return ("import{createRunGuard,isRunState,modOfSeed}from'./mobile_run_guard.mjs';"
-            "const runGuard=createRunGuard(),heldRuns=[];window.isaacRunGuard=runGuard;" + boot_web)
+    return ("import{createRunGuard,isRunState,loadableMods}from'./mobile_run_guard.mjs';"
+            "import{listMods,SEED_BUDGET,openModDb as openModDbForRuns}from'./mods.mjs';"
+            "const runGuard=createRunGuard();window.isaacRunGuard=runGuard;" + boot_web)
 
 
 def apply_mobile_page(page: str, module_dir: Path, data: dict[str, Any]) -> str:
