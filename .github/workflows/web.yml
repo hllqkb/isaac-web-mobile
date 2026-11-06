@@ -166,7 +166,8 @@ jobs:
             const guarded=patchGameScript(CALLBACK_GUARD_SCRIPT,enc('-- head\r\n'+dispatch));
             assert.equal(guarded.status,'guarded');
             const text=dec(guarded.bytes);
-            assert.ok(text.includes('local ok, result = pcall(v.Function, v.Mod, ...) if not ok then _isaacWebReportCallbackError(callbackId, result) result = nil end'),'Call not guarded');
+            assert.ok(text.includes('local ok, result = pcall(v.Function, v.Mod, ...) if not ok then _isaacWebReportCallbackError(callbackId, v.Mod, result) return nil end'),'Call not guarded, or a failed callback does not end the dispatch like the PC game');
+            assert.ok(/from mod " \.\. tostring\(mod and mod\.Name\)/.test(text),'The log must name the mod');
             assert.ok(!text.includes('local result = v.Function(v.Mod, ...)'),'Unguarded call left behind');
             assert.ok(text.indexOf('local function _isaacWebReportCallbackError')<text.indexOf('function _RunCallback('),'Reporter must be defined before dispatch');
             assert.ok(/n <= 3 or n % 1000 == 0/.test(text),'Error log is not bounded');
@@ -176,9 +177,10 @@ jobs:
               'switch off leaves main.lua as shipped':[CALLBACK_GUARD_SCRIPT,dispatch,{enabled:false},'off'],
               'missing call is not patched':[CALLBACK_GUARD_SCRIPT,'function _RunCallback(callbackId, param, ...)\n',{},'unrecognised'],
               'repeated call is not patched':[CALLBACK_GUARD_SCRIPT,dispatch+'local result = v.Function(v.Mod, ...)\n',{},'unrecognised'],
+              'invalid UTF-8 is written as shipped':[CALLBACK_GUARD_SCRIPT,null,{},'unrecognised'],
             };
             for(const [name,[rel,body,opts,status]] of Object.entries(cases)) {
-              const input=enc(body),out=patchGameScript(rel,input,opts);
+              const input=body===null?Uint8Array.from([...enc(dispatch),0xe9,0x0a]):enc(body),out=patchGameScript(rel,input,opts);
               assert.equal(out.status,status,name);
               if(status!=='guarded')assert.equal(out.bytes,input,name+': bytes must be returned untouched');
             }
