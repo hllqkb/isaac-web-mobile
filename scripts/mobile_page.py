@@ -11,8 +11,7 @@ from typing import Any
 # says will load; a run that needs a missing mod stays in the store and out of the game.
 RUN_GUARD_CHECK = (
     "if(!modsOn)runGuard.useMods([]);else{try{const db=await openModDbForRuns();"
-    "try{if(db)for(const id of RETIRED_MODS)if(await getModForRuns(db,id)){await deleteModForRuns(db,id);log(`  retired mod ${id} removed`);}"
-    "runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
+    "try{runGuard.useMods(db?loadableMods(await listMods(db),SEED_BUDGET):[]);}finally{db?.close();}}"
     "catch(e){runGuard.useMods(null);log(`  run check: mod list unavailable (${e.message}); runs restored as before`);}}"
     "log(`  run check: ${runGuard.loaded()?.length??'unknown'} mod(s) expected to load`);"
 )
@@ -26,6 +25,11 @@ RUN_GUARD_PATCHES = (
      'if(!d.restore){log(`  kept aside ${rel}: needs mods ${d.missing.join(\', \')}`);dropBody(bytes);continue;}'
      'if(d.stamp){persistPending.push({key,src,bytes:bytes.slice(),mods:runGuard.loaded()});flushSaves();}}'),
     ('persistPending.push({key,src,bytes});', 'persistPending.push({key,src,bytes,...runGuard.tag(key)});'),
+    # Retired mods are removed right before mods are seeded, whatever happened to the save store.
+    ('const r=await seedMods(modDb,seed,log,',
+     'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);'
+     'log(`  retired mod ${id} removed`);}}catch(e){log(`  retired mod ${id} not removed: ${e.message}`);}}'
+     'const r=await seedMods(modDb,seed,log,'),
 )
 
 

@@ -120,13 +120,13 @@ jobs:
           {
             // Run guard: a run saved with mods stays out of the game when any of those mods will not load.
             const bootWeb=modules['boot_web.mjs'];
-            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'for(const id of RETIRED_MODS)if(await getModForRuns(db,id)){await deleteModForRuns(db,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
+            for(const piece of ["import{createRunGuard,isRunState,loadableMods,RETIRED_MODS}from'./mobile_run_guard.mjs';","import{listMods,SEED_BUDGET,openModDb as openModDbForRuns,getMod as getModForRuns,deleteMod as deleteModForRuns}from'./mods.mjs';",'if(modDb)for(const id of RETIRED_MODS){try{if(await getModForRuns(modDb,id)){await deleteModForRuns(modDb,id);','mods:c.value.mods}','if(isRunState(key)){const d=runGuard.decide(mods);','persistPending.push({key,src,bytes,...runGuard.tag(key)});'])
               assert.equal(bootWeb.split(piece).length,2,'Run guard piece missing or repeated: '+piece);
             const check=bootWeb.indexOf('runGuard.useMods('),restore=bootWeb.indexOf("await stageOk('restore saves'"),seed=bootWeb.indexOf("await stageOk('seed mods'"),read=bootWeb.indexOf('const saved=await readSaves();');
             assert.ok(restore<check&&check<read&&read<seed,'Runs must be checked while saves are restored, before mods are seeded');
             const {createRunGuard,isRunState,loadableMods,LEGACY_RUN,RETIRED_MODS}=await import('./mobile/run_guard.mjs');
             assert.deepEqual(RETIRED_MODS,['drop-trinkets-faster']);
-            assert.ok(bootWeb.indexOf('deleteModForRuns(db,id)')<bootWeb.indexOf('loadableMods(await listMods(db)'),'Retired mods must be removed before the expected set is read');
+            assert.ok(bootWeb.indexOf('deleteModForRuns(modDb,id)')<bootWeb.indexOf('const r=await seedMods(modDb,seed,log,')&&bootWeb.indexOf('deleteModForRuns(modDb,id)')>bootWeb.indexOf("await stageOk('seed mods'"),'Retired mods must be removed in the seed stage, before seeding');
             for(const [key,run] of [['c:/isaac/documents/my games/binding of isaac repentance+/gamestate1.dat',true],['gamestate12.dat',true],['GameState3.DAT',true],['persistentgamedata1.dat',false],['c:/isaac/data/eid/save1.dat',false],['gamestate1.dat.bak',false]])
               assert.equal(isRunState(key),run,key);
             // Same rules as seedMods: enabled, has files, within the budget in list order.
