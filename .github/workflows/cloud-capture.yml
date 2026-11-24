@@ -1,0 +1,38 @@
+name: Cloud Isaac Capture
+on:
+  push:
+    branches: ['capture/floor-one-20261124']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  play:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install cloud capture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg pulseaudio tesseract-ocr
+          npm install --no-save --package-lock=false playwright
+          npx playwright install --with-deps chromium
+      - name: Record and play the real web game
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=IsaacCapture sink_properties=device.description=IsaacCapture
+          pactl set-default-sink IsaacCapture
+          xvfb-run -a -s '-screen 0 1280x720x24' node scripts/capture/play.mjs
+        env:
+          CAPTURE_DIR: work/capture
+      - name: Upload original recording and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isaac-cloud-floor-one
+          path: work/capture/
+          if-no-files-found: warn
+          retention-days: 14
