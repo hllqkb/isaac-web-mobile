@@ -139,6 +139,8 @@ const record = (s) => {
 };
 let recorder;
 let browser;
+let page;
+let frame;
 let videoPath;
 let prepLog;
 try {
@@ -146,12 +148,12 @@ try {
   recorder = spawn('ffmpeg', [
     '-y', '-thread_queue_size', '1024', '-f', 'x11grab', '-video_size', '1280x720', '-framerate', '30', '-i', display,
     '-thread_queue_size', '1024', '-f', 'pulse', '-i', 'IsaacCapture.monitor', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '128k', `${out}/floor-one-original.mp4`,
+    '-c:a', 'aac', '-b:a', '128k', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', `${out}/floor-one-original.mp4`,
   ], { stdio: ['ignore', 'ignore', fs.openSync(`${out}/ffmpeg.log`, 'w')] });
   await new Promise(r => setTimeout(r, 1500));
   browser = await chromium.launch({ headless: false, args: ['--enable-unsafe-swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  const page = await context.newPage();
+  page = await context.newPage();
   await page.route('**/bootstrap.js', async route => {
     const response = await route.fetch();
     let source = await response.text();
@@ -185,14 +187,15 @@ try {
     const frame = document.querySelector('#game-frame');
     return frame && frame.getAttribute('src') && !document.querySelector('#game-player')?.hidden;
   }, undefined, { timeout: 1500000 });
-  clearInterval(prepLog);
   const iframe = await page.locator('#game-frame').elementHandle();
-  const frame = await iframe?.contentFrame();
+  frame = await iframe?.contentFrame();
   if (!frame) throw new Error('Game iframe did not attach');
-  await frame.waitForURL('**/game.html*', { timeout: 1500000 });
-  await frame.waitForFunction(() => (window.isaacFrame || 0) > 120 && (!!document.getElementById('overlay')?.hidden || !document.getElementById('overlay')), undefined, { timeout: 600000 }).catch(async () => {
-    await frame.waitForFunction(() => (window.isaacFrame || 0) > 120, undefined, { timeout: 120000 });
-  });
+  await frame.waitForURL(url => /^\/game(?:\.html)?\/?$/.test(url.pathname), { timeout: 120000 });
+  await frame.waitForLoadState('domcontentloaded', { timeout: 120000 });
+  await frame.waitForSelector('#canvas', { state: 'attached', timeout: 120000 });
+  await frame.waitForFunction(() => (window.isaacFrame || 0) > 120, undefined, { timeout: 120000 });
+  await frame.waitForFunction(() => { const overlay=document.getElementById('overlay'); return !overlay || overlay.hidden; }, undefined, { timeout: 120000 });
+  clearInterval(prepLog);
   record(`BOOT ${JSON.stringify(await frame.evaluate(() => ({ url: location.href, frame: window.isaacFrame, overlayHidden: document.getElementById('overlay')?.hidden, mode: document.querySelector('#touch-controls')?.dataset.mode || null, globals: Object.keys(window).filter(k => /isaac|mod|save/i.test(k)).slice(0, 80) })))}`);
   await page.screenshot({ path: `${out}/boot.png` });
   // Advance the normal title/character screens by Enter; no game state is modified.
@@ -264,6 +267,23 @@ try {
   browser = null;
 } catch (e) {
   record(`FATAL ${e.stack || e.message}`);
+  try {
+    const target = frame || page;
+    if (target) {
+      const diag = await target.evaluate(() => ({
+        url: location.href,
+        title: document.title,
+        bodyTail: (document.body?.innerText || '').slice(-700),
+        frame: window.isaacFrame ?? null,
+        isaacLogTail: Array.isArray(window.isaacLog) ? window.isaacLog.slice(-30).map(String) : String(window.isaacLog || '').slice(-2000),
+      }));
+      record(`FAILURE_DIAGNOSTICS ${JSON.stringify(diag)}`);
+      await page?.screenshot({ path: `${out}/failure.png` });
+    }
+  } catch (diagnosticError) {
+    record(`DIAGNOSTICS_UNAVAILABLE ${diagnosticError.stack || diagnosticError.message}`);
+    try { await page?.screenshot({ path: `${out}/failure.png` }); } catch {}
+  }
   fs.writeFileSync(`${out}/run.log`, log.join('\n') + '\n');
   if (browser) await browser.close().catch(() => {});
   process.exitCode = 1;
