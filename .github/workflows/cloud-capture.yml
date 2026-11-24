@@ -1,7 +1,5 @@
 name: Cloud Isaac Capture
 on:
-  push:
-    branches: ['capture/floor-one-20261124']
   workflow_dispatch:
 permissions:
   contents: read
