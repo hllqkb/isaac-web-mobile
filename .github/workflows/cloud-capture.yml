@@ -1,6 +1,15 @@
 name: Cloud Isaac Capture
 on:
   workflow_dispatch:
+    inputs:
+      route_variant:
+        description: Route strategy for this randomized run
+        required: true
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
 permissions:
   contents: read
 jobs:
@@ -26,6 +35,7 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x720x24' node scripts/capture/play.mjs
         env:
           CAPTURE_DIR: work/capture
+          ROUTE_VARIANT: ${{ inputs.route_variant }}
       - name: Upload original recording and evidence
         if: always()
         uses: actions/upload-artifact@v4

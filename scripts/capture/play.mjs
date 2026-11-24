@@ -1,10 +1,16 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const out = process.env.CAPTURE_DIR || 'work/capture';
+const routeVariant = Math.max(1, Math.min(3, Number(process.env.ROUTE_VARIANT) || 1));
 fs.mkdirSync(out, { recursive: true });
 const lunaMod = String.raw`local mod = RegisterMod("Luna Floor Helper", 1)
+local routeVariant = ${routeVariant}
+local azazelCharacter = false
+local ignoredPickup = nil
+local pickupTarget = nil
+local pickupStartedTick = 0
 Isaac.DebugString("LUNA_HELPER_READY")
 local game = Game()
 local held = {}
@@ -13,16 +19,20 @@ local controlled = {
   [ButtonAction.ACTION_UP]=true,[ButtonAction.ACTION_DOWN]=true,
   [ButtonAction.ACTION_SHOOTLEFT]=true,[ButtonAction.ACTION_SHOOTRIGHT]=true,
   [ButtonAction.ACTION_SHOOTUP]=true,[ButtonAction.ACTION_SHOOTDOWN]=true,
+  [ButtonAction.ACTION_BOMB]=true,
 }
 local orbit = 1
 local tick = 0
 local currentRoom = -1
 local currentStage = -1
+local reportedCharacter = false
 local visitedRooms = {}
 local lastEnemyHp = nil
 local lastHpLog = 0
+local lastBombTick = -10000
 local function setAction(action, down) held[action] = down and true or false end
 local function aim(delta)
+  if azazelCharacter and tick % 90 >= 56 then return end
   if math.abs(delta.X) >= math.abs(delta.Y) then
     if delta.X < 0 then setAction(ButtonAction.ACTION_SHOOTLEFT,true) else setAction(ButtonAction.ACTION_SHOOTRIGHT,true) end
   else
@@ -75,7 +85,7 @@ local function steer(room, player, target, fighting)
     if fighting then
       local offset = target-point
       local across = math.min(math.abs(offset.X),math.abs(offset.Y))
-      local range = math.min(190, math.max(125,(player.TearRange or 260)*0.52))
+      local range = azazelCharacter and 120 or math.min(190, math.max(125,(player.TearRange or 260)*0.52))
       score = across*3 + math.abs(distance-range)*0.55 + cost[i]*6 + dangerAt(point)
       if not room:CheckLine(point,target,0,0,false,false) then score = score+160 end
       if first[i] then score=score+dangerAt(room:GetGridPosition(first[i])) end
@@ -117,6 +127,8 @@ local function logState()
   if index ~= currentRoom then
     currentRoom = index
     visitedRooms[index] = true
+    ignoredPickup = nil
+    pickupTarget = nil
     lastEnemyHp = nil
     local kind = desc and desc.Data and desc.Data.Type or -1
     Isaac.DebugString("LUNA_ROOM:" .. tostring(stage) .. ":" .. tostring(index) .. ":" .. tostring(kind))
@@ -136,10 +148,11 @@ local function findSafePickup(room, player)
   local best, bestDistance
   for _, entity in ipairs(Isaac.GetRoomEntities()) do
     if entity.Type == EntityType.ENTITY_PICKUP then
-      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE and entity.Price == 0
-      local heart = entity.Variant == PickupVariant.PICKUP_HEART and needsRedHealth
-        and room:CheckLine(player.Position, entity.Position, 0, 0, false, false)
-      if collectible or heart then
+      local lineOfSight = player.CanFly or room:CheckLine(player.Position, entity.Position, 0, 0, false, false)
+      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE and entity.Price == 0 and lineOfSight
+      local heart = entity.Variant == PickupVariant.PICKUP_HEART and needsRedHealth and lineOfSight
+      local skipped = ignoredPickup and entity.Position:Distance(ignoredPickup) < 20
+      if (collectible or heart) and not skipped then
         local distance = entity.Position:Distance(player.Position)
         if not bestDistance or distance < bestDistance then best, bestDistance = entity, distance end
       end
@@ -158,8 +171,16 @@ local function selectDoor(room, level)
         local visited = desc.VisitedCount or 0
         local kind = desc.Data and desc.Data.Type or -1
         local boss = RoomType.ROOM_BOSS and kind == RoomType.ROOM_BOSS
+        local treasure = RoomType.ROOM_TREASURE and kind == RoomType.ROOM_TREASURE
         local seen = visitedRooms[desc.GridIndex or targetIndex]
-        local score = (boss and 10000 or 0) + (seen and -1000 or 500) - visited * 100 - slot
+        local score
+        if routeVariant == 2 then
+          score = (treasure and 3500 or 0) + (boss and 1200 or 0) + (seen and -1000 or 500) - visited * 100 - slot
+        elseif routeVariant == 3 then
+          score = (boss and 10000 or 0) + (treasure and 800 or 0) + (seen and -1000 or 500) - visited * 100 + slot
+        else
+          score = (boss and 10000 or 0) + (seen and -1000 or 500) - visited * 100 - slot
+        end
         if not bestScore or score > bestScore then best, bestScore = door, score end
       end
     end
@@ -172,6 +193,12 @@ function mod:Update()
   for action in pairs(held) do held[action] = false end
   local player = Isaac.GetPlayer(0)
   if not player or player:IsDead() then return end
+  if not reportedCharacter and player.GetPlayerType then
+    reportedCharacter = true
+    local playerType = player:GetPlayerType()
+    azazelCharacter = playerType == 7
+    Isaac.DebugString("LUNA_CHAR:" .. tostring(playerType))
+  end
   local room = game:GetRoom()
   local level = game:GetLevel()
   logState()
@@ -194,6 +221,11 @@ function mod:Update()
   lastEnemyHp = totalEnemyHp
   if nearest then
     aim(delta)
+    if nearest:IsBoss() and player:GetNumBombs() > 0 and nearestDistance >= 85 and nearestDistance <= 165 and tick - lastBombTick >= 180 then
+      setAction(ButtonAction.ACTION_BOMB, true)
+      lastBombTick = tick
+      Isaac.DebugString("LUNA_BOMB:" .. tostring(currentStage) .. ":" .. tostring(currentRoom))
+    end
     local direction
     if nearestDistance < 105 then
       direction = unit(delta) * -1
@@ -209,6 +241,16 @@ function mod:Update()
     local trapdoor = findTrapdoor(room)
     local door
     if not trapdoor then door = selectDoor(room, level) end
+    if pickup then
+      if not pickupTarget or pickup.Position:Distance(pickupTarget) > 20 then
+        pickupTarget = pickup.Position
+        pickupStartedTick = tick
+      elseif tick - pickupStartedTick > 900 then
+        ignoredPickup = pickup.Position
+        pickupTarget = nil
+        pickup = nil
+      end
+    end
     if pickup then
       move(steer(room, player, pickup.Position, false))
     elseif trapdoor then
@@ -251,8 +293,8 @@ try {
     '-c:a', 'aac', '-b:a', '128k', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', `${out}/floor-one-original.mp4`,
   ], { stdio: ['ignore', 'ignore', fs.openSync(`${out}/ffmpeg.log`, 'w')] });
   await new Promise(r => setTimeout(r, 1500));
-  browser = await chromium.launch({ headless: false, args: ['--enable-unsafe-swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  browser = await chromium.launch({ headless: false, args: ['--kiosk', '--start-fullscreen', '--window-size=1280,720', '--window-position=0,0', '--enable-unsafe-swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
+  const context = await browser.newContext({ viewport: null });
   page = await context.newPage();
   await page.route('**/bootstrap.js', async route => {
     const response = await route.fetch();
@@ -309,16 +351,60 @@ try {
       return {active:false,logicFrame,player:false};
     } catch { return {active:false,logicFrame:0,player:false}; }
   });
-  let started = await gameplayState();
-  for (let i = 0; i < 40 && !started.active; i++) {
-    await frame.evaluate(() => window.isaacInjectKey?.('enter', true, 'cloud-capture'));
+  const tapMenuKey = async key => {
+    await frame.evaluate(key => window.isaacInjectKey?.(key, true, 'cloud-capture'), key);
     await frame.waitForTimeout(120);
-    await frame.evaluate(() => window.isaacInjectKey?.('enter', false, 'cloud-capture'));
-    await frame.waitForTimeout(450);
+    await frame.evaluate(key => window.isaacInjectKey?.(key, false, 'cloud-capture'), key);
+    await frame.waitForTimeout(350);
+  };
+  const readMenu = async () => {
+    const shot = await page.screenshot();
+    const runs = ['6', '11'].map(psm => spawnSync('tesseract', ['stdin', 'stdout', '--psm', psm], { input: shot, encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 }));
+    const text = runs.map(result => result.stdout || '').join(' ').replace(/\s+/g, ' ').trim();
+    record(`MENU_OCR ${JSON.stringify({ text, statuses: runs.map(result => result.status), errors: runs.map(result => result.error?.message || null) })}`);
+    return text;
+  };
+  const characterMenu = text => /who\s*am|more\s*options|greedier|less\s*room/i.test(text)
+    && /\b(?:isaac|azazel|normal)\b/i.test(text);
+  let started = await gameplayState();
+  let azazelMenuConfirmed = false;
+  let menuText = started.active ? '' : await readMenu();
+  for (let i = 0; i < 40 && !started.active; i++) {
+    if (characterMenu(menuText)) {
+      record('CHARACTER_MENU_DETECTED');
+      let selected = /\bazazel\b/i.test(menuText);
+      for (let step = 0; step < 7 && !selected; step++) {
+        await tapMenuKey('right');
+        await frame.waitForTimeout(750);
+        menuText = await readMenu();
+        selected = /\bazazel\b/i.test(menuText);
+      }
+      if (!selected) {
+        record('AZAZEL_NAME_NOT_OCR_VISIBLE_AFTER_RIGHT_INPUTS');
+      } else {
+        azazelMenuConfirmed = true;
+        record('AZAZEL_MENU_CONFIRMED');
+      }
+      // Confirm the visible character via the game API immediately after the normal menu selection.
+      await tapMenuKey('enter');
+      for (let attempt = 0; attempt < 20 && !started.active; attempt++) {
+        await frame.waitForTimeout(500);
+        started = await gameplayState();
+      }
+      break;
+    }
+    await tapMenuKey('enter');
     started = await gameplayState();
+    if (started.active) break;
+    await frame.waitForTimeout(1100);
+    menuText = await readMenu();
   }
-  record(`PLAY ${JSON.stringify({ started, state: await frame.evaluate(() => ({ frame: window.isaacFrame, mode: document.querySelector('#touch-controls')?.dataset.mode || null })) })}`);
+  record(`PLAY ${JSON.stringify({ started, azazelMenuConfirmed, state: await frame.evaluate(() => ({ frame: window.isaacFrame, mode: document.querySelector('#touch-controls')?.dataset.mode || null })) })}`);
   if (!started.active) throw new Error('GAMEPLAY_MODE_NOT_REACHED: no live player pointer or logic frame');
+  await frame.waitForFunction(() => Array.isArray(window.isaacLog) && window.isaacLog.some(line => /LUNA_CHAR:\d+/.test(String(line))), undefined, { timeout: 30000 });
+  const selectedCharacter = await frame.evaluate(() => { const line = (window.isaacLog || []).map(String).find(value => /LUNA_CHAR:\d+/.test(value)); return Number(line?.match(/LUNA_CHAR:(\d+)/)?.[1] || -1); });
+  record(`SELECTED_CHARACTER_TYPE ${selectedCharacter}`);
+  if (selectedCharacter !== 7) throw new Error(`AZAZEL_CHARACTER_TYPE_MISMATCH: ${selectedCharacter}`);
   await page.screenshot({ path: `${out}/play-start.png` });
   const stopAt = Date.now() + Number(process.env.PLAY_MS || 3600000);
   let secondFloor = false;
@@ -362,6 +448,7 @@ try {
       lastRoomChange = Date.now();
     }
     const stageHit = /LUNA_STAGE:\s*2\b/.test(observed);
+    if (azazelMenuConfirmed && /LUNA_CHAR:(\d+)/.test(observed) && Number(observed.match(/LUNA_CHAR:(\d+)/)?.[1]) !== 7) throw new Error('AZAZEL_CHARACTER_TYPE_MISMATCH');
     if (stageHit) {
       secondFloor = true;
       record('SECOND_FLOOR_REACHED');
