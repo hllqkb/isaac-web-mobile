@@ -158,7 +158,7 @@ try {
     const anchor = '  localStorage.setItem(pendingKey, info.sha256);';
     if (source.split(anchor).length !== 2) throw new Error('Cloud-only helper insertion point changed');
     const bytes = Buffer.from(lunaMod, 'utf8').toString('base64');
-    const addition = `  const __lunaBytes = { $bytes: ${JSON.stringify(bytes)} };\n  preset.databases['isaac-mods'].files.push({key:'luna-floor-helper/main.lua',value:__lunaBytes});\n  preset.databases['isaac-mods'].mods.push({key:'luna-floor-helper',value:{id:'luna-floor-helper',name:'Luna Floor Helper',description:'Cloud-only normal movement and aim helper.',version:'1',bytes:${Buffer.byteLength(lunaMod)},files:1,added:Date.now(),enabled:true}});\n`;
+    const addition = `  const __lunaBytes = { $bytes: ${JSON.stringify(bytes)} };\n  const __runFiles = preset.databases['isaac-saves'].files;\n  const __runCount = __runFiles.filter(r => /(^|[\\\\/])gamestate1\\.dat$/i.test(String(r.key))).length;\n  if (__runCount !== 1) throw new Error('Expected one fresh-profile in-progress save to clear; found ' + __runCount);\n  preset.databases['isaac-saves'].files = __runFiles.filter(r => !/(^|[\\\\/])gamestate1\\.dat$/i.test(String(r.key)));\n  preset.databases['isaac-mods'].files.push({key:'luna-floor-helper/main.lua',value:{bytes:__lunaBytes}});\n  preset.databases['isaac-mods'].mods.push({key:'luna-floor-helper',value:{id:'luna-floor-helper',name:'Luna Floor Helper',description:'Cloud-only normal movement and aim helper.',version:'1',bytes:${Buffer.byteLength(lunaMod)},files:1,added:Date.now(),enabled:true}});\n`;
     source = source.replace(anchor, `${addition}${anchor}`);
     record('CLOUD_ONLY_HELPER_ADDED_TO_FRESH_PRESET_IMPORT');
     await route.fulfill({ response, body: source });
@@ -193,21 +193,27 @@ try {
   await frame.waitForFunction(() => (window.isaacFrame || 0) > 120 && (!!document.getElementById('overlay')?.hidden || !document.getElementById('overlay')), undefined, { timeout: 600000 }).catch(async () => {
     await frame.waitForFunction(() => (window.isaacFrame || 0) > 120, undefined, { timeout: 120000 });
   });
-  record(`BOOT ${JSON.stringify(await frame.evaluate(() => ({ url: location.href, frame: window.isaacFrame, overlayHidden: document.getElementById('overlay')?.hidden, mode: document.querySelector('#touch-controls')?.dataset.mode, globals: Object.keys(window).filter(k => /isaac|mod|save/i.test(k)).slice(0, 80) })))}`);
+  record(`BOOT ${JSON.stringify(await frame.evaluate(() => ({ url: location.href, frame: window.isaacFrame, overlayHidden: document.getElementById('overlay')?.hidden, mode: document.querySelector('#touch-controls')?.dataset.mode || null, globals: Object.keys(window).filter(k => /isaac|mod|save/i.test(k)).slice(0, 80) })))}`);
   await page.screenshot({ path: `${out}/boot.png` });
   // Advance the normal title/character screens by Enter; no game state is modified.
-  for (let i = 0; i < 16; i++) {
-    const mode = await frame.evaluate(() => document.querySelector('#touch-controls')?.dataset.mode || '');
-    if (mode === 'game') break;
+  const gameplayState = () => frame.evaluate(() => {
+    try {
+      const G=window.isaacGuest,g=G.u32(0xc71678),begin=G.u32(g+0x1baa8),end=G.u32(g+0x1baac),logicFrame=G.u32(g+0x264f8);
+      for(let p=begin;p<end&&p<begin+256;p+=4){const e=G.u32(p);if(e&&G.u32(e+0x28)===1)return {active:logicFrame>120&&!G.u8(e+0x173),logicFrame,player:true};}
+      return {active:false,logicFrame,player:false};
+    } catch { return {active:false,logicFrame:0,player:false}; }
+  });
+  let started = await gameplayState();
+  for (let i = 0; i < 40 && !started.active; i++) {
     await frame.evaluate(() => window.isaacInjectKey?.('enter', true, 'cloud-capture'));
     await frame.waitForTimeout(120);
     await frame.evaluate(() => window.isaacInjectKey?.('enter', false, 'cloud-capture'));
-    await frame.waitForTimeout(350);
+    await frame.waitForTimeout(450);
+    started = await gameplayState();
   }
-  record(`PLAY ${JSON.stringify(await frame.evaluate(() => ({ frame: window.isaacFrame, mode: document.querySelector('#touch-controls')?.dataset.mode, run: (() => { try { const G=window.isaacGuest,g=G.u32(0xc71678); return {game:!!g, gameFrame:G.u32(g+0x264f8), paused:G.u32(g+0x23a74)}; } catch { return null; } })() })))}`);
+  record(`PLAY ${JSON.stringify({ started, state: await frame.evaluate(() => ({ frame: window.isaacFrame, mode: document.querySelector('#touch-controls')?.dataset.mode || null })) })}`);
+  if (!started.active) throw new Error('GAMEPLAY_MODE_NOT_REACHED: no live player pointer or logic frame');
   await page.screenshot({ path: `${out}/play-start.png` });
-  const initialMode = await frame.evaluate(() => document.querySelector('#touch-controls')?.dataset.mode || '');
-  if (initialMode !== 'game') throw new Error(`GAMEPLAY_MODE_NOT_REACHED:${initialMode}`);
   const stopAt = Date.now() + Number(process.env.PLAY_MS || 3600000);
   let secondFloor = false;
   let helperSeen = false;
