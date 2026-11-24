@@ -40,6 +40,69 @@ local function unit(vector)
   if length < 0.01 then return Vector(0,0) end
   return vector / length
 end
+-- Pick the next ordinary movement input. No entity or world state is mutated.
+local function steer(room, player, target, fighting)
+  local pos = player.Position
+  local start = room:GetGridIndex(pos)
+  local width = room:GetGridWidth()
+  local size = room:GetGridSize()
+  local grid = { start }
+  local first, cost = {}, { [start] = 0 }
+  local best, bestScore = start, math.huge
+  local danger = {}
+  if fighting then
+    for _, e in ipairs(Isaac.GetRoomEntities()) do
+      if e.Type == EntityType.ENTITY_PROJECTILE or (e:IsActiveEnemy(false) and not e:IsDead()) then
+        danger[#danger+1] = {p=e.Position + e.Velocity*5, radius=math.min(110, 38+e.Size), projectile=e.Type==EntityType.ENTITY_PROJECTILE}
+      end
+    end
+  end
+  local function dangerAt(point)
+    local penalty = 0
+    for _, e in ipairs(danger) do
+      local near = math.max(0, e.radius + 18 - point:Distance(e.p))
+      penalty = penalty + near*(e.projectile and 12 or 7)
+    end
+    return penalty
+  end
+  local cursor = 1
+  while grid[cursor] do
+    local i = grid[cursor]
+    cursor = cursor+1
+    local point = room:GetGridPosition(i)
+    local distance = point:Distance(target)
+    local score = distance + cost[i]*0.3
+    if fighting then
+      local offset = target-point
+      local across = math.min(math.abs(offset.X),math.abs(offset.Y))
+      local range = math.min(190, math.max(125,(player.TearRange or 260)*0.52))
+      score = across*3 + math.abs(distance-range)*0.55 + cost[i]*6 + dangerAt(point)
+      if not room:CheckLine(point,target,0,0,false,false) then score = score+160 end
+      if first[i] then score=score+dangerAt(room:GetGridPosition(first[i])) end
+    end
+    if score < bestScore then best,bestScore=i,score end
+    for _, step in ipairs({1,-1,width,-width}) do
+      local j=i+step
+      if j>=0 and j<size and not cost[j] and (math.abs(step)~=1 or math.floor(i/width)==math.floor(j/width)) then
+        local nextPoint=room:GetGridPosition(j)
+        local collision=room:GetGridCollision(j)
+        if room:IsPositionInRoom(nextPoint,5) and (collision==0 or (player.CanFly and collision==1)) then
+          cost[j]=cost[i]+1
+          first[j]=first[i] or j
+          grid[#grid+1]=j
+        end
+      end
+    end
+  end
+  if best==start then
+    if not fighting then return target-pos end
+    local d=target-pos
+    if math.abs(d.X)>math.abs(d.Y) then return Vector(0,math.abs(d.Y)>6 and d.Y or 0) end
+    return Vector(math.abs(d.X)>6 and d.X or 0,0)
+  end
+  return room:GetGridPosition(first[best])-pos
+end
+
 local function logState()
   local level = game:GetLevel()
   local desc = level:GetCurrentRoomDesc()
@@ -121,18 +184,18 @@ function mod:Update()
       if tick % 120 == 0 then orbit = -orbit end
       direction = unit(Vector(-delta.Y,delta.X)) * orbit
     end
-    move(direction)
+    move(steer(room, player, nearest.Position, true))
   else
     local trapdoor = findTrapdoor(room)
     local door
     if not trapdoor then door = selectDoor(room, level) end
     if trapdoor then
-      move(unit(trapdoor - player.Position))
+      move(steer(room, player, trapdoor, false))
     elseif door then
-      move(unit(door.Position - player.Position))
+      move(steer(room, player, door.Position, false))
     else
       -- After the boss dies, walk over the ordinary center exit/trapdoor.
-      move(unit(room:GetCenterPos() - player.Position))
+      move(steer(room, player, room:GetCenterPos(), false))
     end
     if tick % 60 == 0 then orbit = -orbit end
   end
