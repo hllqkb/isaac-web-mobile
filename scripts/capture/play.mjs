@@ -381,13 +381,20 @@ try {
       }
       if (!selected) {
         record('AZAZEL_NAME_NOT_OCR_VISIBLE_AFTER_RIGHT_INPUTS');
-      } else {
-        azazelMenuConfirmed = true;
-        record('AZAZEL_MENU_CONFIRMED');
+        throw new Error('AZAZEL_MENU_SELECTION_NOT_CONFIRMED');
       }
-      // Confirm the visible character via the game API immediately after the normal menu selection.
+      record('AZAZEL_MENU_CONFIRMED');
+      await tapMenuKey('e');
+      await frame.waitForTimeout(1100);
+      menuText = await readMenu();
+      if (!/\bazazel\b/i.test(menuText) || /broken\s*wings|hemopt[yi]sis/i.test(menuText)) {
+        throw new Error('NORMAL_AZAZEL_NOT_CONFIRMED_AFTER_E_TOGGLE');
+      }
+      azazelMenuConfirmed = true;
+      record('NORMAL_AZAZEL_MENU_CONFIRMED');
+      // Confirm the selected character through LUNA_CHAR and allow slow cloud startup frames.
       await tapMenuKey('enter');
-      for (let attempt = 0; attempt < 20 && !started.active; attempt++) {
+      for (let attempt = 0; attempt < 90 && !started.active; attempt++) {
         await frame.waitForTimeout(500);
         started = await gameplayState();
       }
