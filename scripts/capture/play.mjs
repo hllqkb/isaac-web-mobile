@@ -18,6 +18,9 @@ local orbit = 1
 local tick = 0
 local currentRoom = -1
 local currentStage = -1
+local visitedRooms = {}
+local lastEnemyHp = nil
+local lastHpLog = 0
 local function setAction(action, down) held[action] = down and true or false end
 local function aim(delta)
   if math.abs(delta.X) >= math.abs(delta.Y) then
@@ -44,10 +47,14 @@ local function logState()
   local stage = level:GetStage()
   if stage ~= currentStage then
     currentStage = stage
+    visitedRooms = {}
+    lastEnemyHp = nil
     Isaac.DebugString("LUNA_STAGE:" .. tostring(stage))
   end
   if index ~= currentRoom then
     currentRoom = index
+    visitedRooms[index] = true
+    lastEnemyHp = nil
     local kind = desc and desc.Data and desc.Data.Type or -1
     Isaac.DebugString("LUNA_ROOM:" .. tostring(stage) .. ":" .. tostring(index) .. ":" .. tostring(kind))
   end
@@ -69,7 +76,8 @@ local function selectDoor(room, level)
         local visited = desc.VisitedCount or 0
         local kind = desc.Data and desc.Data.Type or -1
         local boss = RoomType.ROOM_BOSS and kind == RoomType.ROOM_BOSS
-        local score = (boss and 10000 or 0) - visited * 100 - slot
+        local seen = visitedRooms[desc.GridIndex or targetIndex]
+        local score = (boss and 10000 or 0) + (seen and -1000 or 500) - visited * 100 - slot
         if not bestScore or score > bestScore then best, bestScore = door, score end
       end
     end
@@ -86,8 +94,10 @@ function mod:Update()
   local level = game:GetLevel()
   logState()
   local nearest, nearestDistance, delta
+  local totalEnemyHp = 0
   for _, entity in ipairs(Isaac.GetRoomEntities()) do
     if entity:IsActiveEnemy(false) and not entity:IsDead() then
+      totalEnemyHp = totalEnemyHp + (entity.HitPoints or 0)
       local diff = entity.Position - player.Position
       local distance = diff:Length()
       if not nearestDistance or distance < nearestDistance then
@@ -95,6 +105,11 @@ function mod:Update()
       end
     end
   end
+  if lastEnemyHp and totalEnemyHp < lastEnemyHp - 0.25 and tick - lastHpLog >= 60 then
+    Isaac.DebugString("LUNA_HP:" .. tostring(currentStage) .. ":" .. tostring(currentRoom) .. ":" .. string.format("%.1f", totalEnemyHp))
+    lastHpLog = tick
+  end
+  lastEnemyHp = totalEnemyHp
   if nearest then
     aim(delta)
     local direction
@@ -165,7 +180,10 @@ try {
     record('CLOUD_ONLY_HELPER_ADDED_TO_FRESH_PRESET_IMPORT');
     await route.fulfill({ response, body: source });
   });
-  page.on('console', m => record(`CONSOLE ${m.type()}: ${m.text()}`));
+  page.on('console', m => {
+    const text = m.text();
+    if (m.type() === 'error' || /LUNA_(?:HELPER_READY|STAGE|ROOM|HP)/.test(text)) record(`CONSOLE ${m.type()}: ${text}`);
+  });
   page.on('pageerror', e => record(`PAGEERROR ${e.stack || e.message}`));
   page.on('requestfailed', r => record(`REQUESTFAILED ${r.url()} ${r.failure()?.errorText}`));
   await page.goto('https://isaac.hllqk.cn/', { waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -221,8 +239,10 @@ try {
   let secondFloor = false;
   let helperSeen = false;
   let lastRoomPtr = null;
+  let lastRoomKey = null;
   let lastRoomChange = Date.now();
   let lastScreenshot = 0;
+  const seenHpMarks = new Set();
   const gameplayStarted = Date.now();
   while (Date.now() < stopAt) {
     const state = await frame.evaluate(() => {
@@ -237,7 +257,25 @@ try {
     });
     record(`STATE ${JSON.stringify(state)}`);
     const observed = [...state.logs, ...log].join('\n');
-    if (observed.includes('LUNA_HELPER_READY')) helperSeen = true;
+    let latestRoomKey = null;
+    for (const line of [...state.logs, ...log]) {
+      const roomMark = String(line).match(/LUNA_ROOM:(\d+):(-?\d+):(-?\d+)/);
+      if (roomMark) {
+        helperSeen = true;
+        latestRoomKey = `${roomMark[1]}:${roomMark[2]}`;
+      }
+      if (/LUNA_STAGE:\s*\d+\b|LUNA_HELPER_READY/.test(String(line))) helperSeen = true;
+      const hpMark = String(line).match(/LUNA_HP:(\d+):(-?\d+):([\d.]+)/);
+      if (hpMark) {
+        helperSeen = true;
+        const key = hpMark[0];
+        if (!seenHpMarks.has(key)) { seenHpMarks.add(key); lastRoomChange = Date.now(); }
+      }
+    }
+    if (latestRoomKey && latestRoomKey !== lastRoomKey) {
+      lastRoomKey = latestRoomKey;
+      lastRoomChange = Date.now();
+    }
     const stageHit = /LUNA_STAGE:\s*2\b/.test(observed);
     if (stageHit) {
       secondFloor = true;
