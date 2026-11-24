@@ -128,6 +128,24 @@ local function findTrapdoor(room)
     if grid and grid:GetType() == GridEntityType.GRID_TRAPDOOR then return grid.Position end
   end
 end
+local function findSafePickup(room, player)
+  local desc = game:GetLevel():GetCurrentRoomDesc()
+  local kind = desc and desc.Data and desc.Data.Type or -1
+  if kind == RoomType.ROOM_CURSE or kind == RoomType.ROOM_SACRIFICE then return nil end
+  local needsRedHealth = player:GetHearts() < player:GetMaxHearts()
+  local best, bestDistance
+  for _, entity in ipairs(Isaac.GetRoomEntities()) do
+    if entity.Type == EntityType.ENTITY_PICKUP then
+      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE
+      local heart = entity.Variant == PickupVariant.PICKUP_HEART and needsRedHealth
+      if collectible or heart then
+        local distance = entity.Position:Distance(player.Position)
+        if not bestDistance or distance < bestDistance then best, bestDistance = entity, distance end
+      end
+    end
+  end
+  return best
+end
 local function selectDoor(room, level)
   local best, bestScore
   for slot=0,7 do
@@ -186,10 +204,13 @@ function mod:Update()
     end
     move(steer(room, player, nearest.Position, true))
   else
+    local pickup = findSafePickup(room, player)
     local trapdoor = findTrapdoor(room)
     local door
     if not trapdoor then door = selectDoor(room, level) end
-    if trapdoor then
+    if pickup then
+      move(steer(room, player, pickup.Position, false))
+    elseif trapdoor then
       move(steer(room, player, trapdoor, false))
     elseif door then
       move(steer(room, player, door.Position, false))
