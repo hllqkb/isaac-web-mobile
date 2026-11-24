@@ -136,8 +136,9 @@ local function findSafePickup(room, player)
   local best, bestDistance
   for _, entity in ipairs(Isaac.GetRoomEntities()) do
     if entity.Type == EntityType.ENTITY_PICKUP then
-      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE
+      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE and entity.Price == 0
       local heart = entity.Variant == PickupVariant.PICKUP_HEART and needsRedHealth
+        and room:CheckLine(player.Position, entity.Position, 0, 0, false, false)
       if collectible or heart then
         local distance = entity.Position:Distance(player.Position)
         if not bestDistance or distance < bestDistance then best, bestDistance = entity, distance end
