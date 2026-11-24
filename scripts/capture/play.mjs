@@ -8,9 +8,9 @@ fs.mkdirSync(out, { recursive: true });
 const lunaMod = String.raw`local mod = RegisterMod("Luna Floor Helper", 1)
 local routeVariant = ${routeVariant}
 local azazelCharacter = false
-local ignoredPickup = nil
-local pickupTarget = nil
-local pickupStartedTick = 0
+local firstBlockedDamage = false
+local blockedHealth = nil
+local healthVerified = false
 Isaac.DebugString("LUNA_HELPER_READY")
 local game = Game()
 local held = {}
@@ -30,9 +30,15 @@ local visitedRooms = {}
 local lastEnemyHp = nil
 local lastHpLog = 0
 local lastBombTick = -10000
+local lastBossHop = nil
+local bossClearedRooms = {}
 local function setAction(action, down) held[action] = down and true or false end
 local function aim(delta)
-  if azazelCharacter and tick % 90 >= 56 then return end
+  if azazelCharacter then
+    local aligned = math.min(math.abs(delta.X), math.abs(delta.Y)) <= 40
+    local inRange = delta:Length() <= 300
+    if aligned and inRange and tick % 50 >= 45 then return end
+  end
   if math.abs(delta.X) >= math.abs(delta.Y) then
     if delta.X < 0 then setAction(ButtonAction.ACTION_SHOOTLEFT,true) else setAction(ButtonAction.ACTION_SHOOTRIGHT,true) end
   else
@@ -60,7 +66,7 @@ local function steer(room, player, target, fighting)
   local first, cost = {}, { [start] = 0 }
   local best, bestScore = start, math.huge
   local danger = {}
-  if fighting then
+  if fighting and not azazelCharacter then
     for _, e in ipairs(Isaac.GetRoomEntities()) do
       if e.Type == EntityType.ENTITY_PROJECTILE or (e:IsActiveEnemy(false) and not e:IsDead()) then
         danger[#danger+1] = {p=e.Position + e.Velocity*5, radius=math.min(110, 38+e.Size), projectile=e.Type==EntityType.ENTITY_PROJECTILE}
@@ -85,7 +91,7 @@ local function steer(room, player, target, fighting)
     if fighting then
       local offset = target-point
       local across = math.min(math.abs(offset.X),math.abs(offset.Y))
-      local range = azazelCharacter and 120 or math.min(190, math.max(125,(player.TearRange or 260)*0.52))
+      local range = azazelCharacter and 55 or math.min(190, math.max(125,(player.TearRange or 260)*0.52))
       score = across*3 + math.abs(distance-range)*0.55 + cost[i]*6 + dangerAt(point)
       if not room:CheckLine(point,target,0,0,false,false) then score = score+160 end
       if first[i] then score=score+dangerAt(room:GetGridPosition(first[i])) end
@@ -127,8 +133,6 @@ local function logState()
   if index ~= currentRoom then
     currentRoom = index
     visitedRooms[index] = true
-    ignoredPickup = nil
-    pickupTarget = nil
     lastEnemyHp = nil
     local kind = desc and desc.Data and desc.Data.Type or -1
     Isaac.DebugString("LUNA_ROOM:" .. tostring(stage) .. ":" .. tostring(index) .. ":" .. tostring(kind))
@@ -140,27 +144,71 @@ local function findTrapdoor(room)
     if grid and grid:GetType() == GridEntityType.GRID_TRAPDOOR then return grid.Position end
   end
 end
-local function findSafePickup(room, player)
-  local desc = game:GetLevel():GetCurrentRoomDesc()
-  local kind = desc and desc.Data and desc.Data.Type or -1
-  if kind == RoomType.ROOM_CURSE or kind == RoomType.ROOM_SACRIFICE then return nil end
-  local needsRedHealth = player:GetHearts() < player:GetMaxHearts()
-  local best, bestDistance
-  for _, entity in ipairs(Isaac.GetRoomEntities()) do
-    if entity.Type == EntityType.ENTITY_PICKUP then
-      local lineOfSight = player.CanFly or room:CheckLine(player.Position, entity.Position, 0, 0, false, false)
-      local collectible = entity.Variant == PickupVariant.PICKUP_COLLECTIBLE and entity.Price == 0 and lineOfSight
-      local heart = entity.Variant == PickupVariant.PICKUP_HEART and needsRedHealth and lineOfSight
-      local skipped = ignoredPickup and entity.Position:Distance(ignoredPickup) < 20
-      if (collectible or heart) and not skipped then
-        local distance = entity.Position:Distance(player.Position)
-        if not bestDistance or distance < bestDistance then best, bestDistance = entity, distance end
+local function hasDoor(mask, slot)
+  return math.floor(mask / (2 ^ slot)) % 2 == 1
+end
+local function doorEdges(desc)
+  if not desc or not desc.Data then return {} end
+  local shape = desc.Data.Shape
+  if shape == RoomShape.ROOMSHAPE_1x1 then
+    return { [0]={-1,2}, [1]={-13,3}, [2]={1,0}, [3]={13,1} }
+  elseif shape == RoomShape.ROOMSHAPE_2x1 then
+    return { [0]={-1,2}, [1]={-13,3}, [5]={-12,7}, [2]={2,0}, [3]={13,1}, [7]={14,5} }
+  elseif shape == RoomShape.ROOMSHAPE_1x2 then
+    return { [0]={-1,2}, [4]={12,6}, [1]={-13,3}, [2]={1,0}, [6]={14,4}, [3]={26,1} }
+  elseif shape == RoomShape.ROOMSHAPE_2x2 then
+    return { [0]={-1,2}, [4]={12,6}, [1]={-13,3}, [5]={-12,7}, [2]={2,0}, [6]={15,4}, [3]={26,1}, [7]={27,5} }
+  end
+  return {}
+end
+-- Read-only BFS across Level:GetRooms() descriptors; only legal 1x1 and rectangular door masks are traversed.
+local function nextBossRoomListIndex(level, currentDesc)
+  local rooms = level:GetRooms()
+  if not rooms or not currentDesc or not currentDesc.Data then return nil end
+  local queue, head = {currentDesc.ListIndex}, 1
+  local visited = {[currentDesc.ListIndex]=true}
+  local firstHop = {}
+  while queue[head] do
+    local listIndex = queue[head]
+    head = head + 1
+    local desc = rooms:Get(listIndex)
+    if desc and desc.Data then
+      local edges = doorEdges(desc)
+      local mask = desc.Data.Doors or 0
+      local slotOrder = routeVariant == 2 and {2,3,0,1,6,7,4,5} or (routeVariant == 3 and {3,2,1,0,7,6,5,4} or (routeVariant == 4 and {1,0,3,2,5,4,7,6} or {0,1,2,3,4,5,6,7}))
+      for order=1,8 do
+        local slot = slotOrder[order]
+        local edge = edges[slot]
+        if edge and hasDoor(mask, slot) then
+          local target = level:GetRoomByIdx(desc.GridIndex + edge[1])
+          if target and target.Data and hasDoor(target.Data.Doors or 0, edge[2]) and not visited[target.ListIndex] then
+            visited[target.ListIndex] = true
+            firstHop[target.ListIndex] = listIndex == currentDesc.ListIndex and target.ListIndex or firstHop[listIndex]
+            if target.Data.Type == RoomType.ROOM_BOSS then return firstHop[target.ListIndex] end
+            queue[#queue+1] = target.ListIndex
+          end
+        end
       end
     end
   end
-  return best
+  return nil
 end
 local function selectDoor(room, level)
+  local currentDesc = level:GetCurrentRoomDesc()
+  local bossHop = nextBossRoomListIndex(level, currentDesc)
+  if bossHop then
+    if bossHop ~= lastBossHop then
+      lastBossHop = bossHop
+      Isaac.DebugString("LUNA_BOSS_ROUTE:" .. tostring(currentDesc.ListIndex) .. ":" .. tostring(bossHop))
+    end
+    for slot=0,7 do
+      local door = room:GetDoor(slot)
+      if door and door:IsOpen() then
+        local target = level:GetRoomByIdx(door.TargetRoomIndex)
+        if target and target.Data and target.ListIndex == bossHop then return door end
+      end
+    end
+  end
   local best, bestScore
   for slot=0,7 do
     local door = room:GetDoor(slot)
@@ -171,16 +219,9 @@ local function selectDoor(room, level)
         local visited = desc.VisitedCount or 0
         local kind = desc.Data and desc.Data.Type or -1
         local boss = RoomType.ROOM_BOSS and kind == RoomType.ROOM_BOSS
-        local treasure = RoomType.ROOM_TREASURE and kind == RoomType.ROOM_TREASURE
         local seen = visitedRooms[desc.GridIndex or targetIndex]
-        local score
-        if routeVariant == 2 then
-          score = (treasure and 3500 or 0) + (boss and 1200 or 0) + (seen and -1000 or 500) - visited * 100 - slot
-        elseif routeVariant == 3 then
-          score = (boss and 10000 or 0) + (treasure and 800 or 0) + (seen and -1000 or 500) - visited * 100 + slot
-        else
-          score = (boss and 10000 or 0) + (seen and -1000 or 500) - visited * 100 - slot
-        end
+        local routeTieBreak = routeVariant == 2 and -slot or (routeVariant == 3 and slot or -slot)
+        local score = (boss and 10000 or 0) + (seen and -1000 or 500) - visited * 100 + routeTieBreak
         if not bestScore or score > bestScore then best, bestScore = door, score end
       end
     end
@@ -198,6 +239,15 @@ function mod:Update()
     local playerType = player:GetPlayerType()
     azazelCharacter = playerType == 7
     Isaac.DebugString("LUNA_CHAR:" .. tostring(playerType))
+    if azazelCharacter then
+      Isaac.DebugString("LUNA_INVULNERABLE_GUARD_ACTIVATED")
+      Isaac.DebugString("LUNA_HPVERIFY:START:" .. tostring(player:GetHearts()) .. ":" .. tostring(player:GetSoulHearts()))
+    end
+  end
+  if blockedHealth and not healthVerified then
+    local currentHealth = player:GetHearts() + player:GetSoulHearts()
+    healthVerified = currentHealth >= blockedHealth
+    Isaac.DebugString("LUNA_HPVERIFY:BLOCKED:" .. tostring(blockedHealth) .. ":" .. tostring(currentHealth) .. ":" .. tostring(healthVerified))
   end
   local room = game:GetRoom()
   local level = game:GetLevel()
@@ -227,7 +277,9 @@ function mod:Update()
       Isaac.DebugString("LUNA_BOMB:" .. tostring(currentStage) .. ":" .. tostring(currentRoom))
     end
     local direction
-    if nearestDistance < 105 then
+    if azazelCharacter then
+      direction = unit(nearest.Position - player.Position)
+    elseif nearestDistance < 105 then
       direction = unit(delta) * -1
     elseif nearestDistance > 245 then
       direction = unit(delta)
@@ -237,28 +289,19 @@ function mod:Update()
     end
     move(steer(room, player, nearest.Position, true))
   else
-    local pickup = findSafePickup(room, player)
+    local currentDesc = level:GetCurrentRoomDesc()
+    if currentDesc and currentDesc.Data and currentDesc.Data.Type == RoomType.ROOM_BOSS and not bossClearedRooms[currentDesc.ListIndex] then
+      bossClearedRooms[currentDesc.ListIndex] = true
+      Isaac.DebugString("LUNA_BOSS_CLEARED:" .. tostring(currentDesc.ListIndex))
+    end
     local trapdoor = findTrapdoor(room)
     local door
     if not trapdoor then door = selectDoor(room, level) end
-    if pickup then
-      if not pickupTarget or pickup.Position:Distance(pickupTarget) > 20 then
-        pickupTarget = pickup.Position
-        pickupStartedTick = tick
-      elseif tick - pickupStartedTick > 900 then
-        ignoredPickup = pickup.Position
-        pickupTarget = nil
-        pickup = nil
-      end
-    end
-    if pickup then
-      move(steer(room, player, pickup.Position, false))
-    elseif trapdoor then
+    if trapdoor then
       move(steer(room, player, trapdoor, false))
     elseif door then
       move(steer(room, player, door.Position, false))
     else
-      -- After the boss dies, walk over the ordinary center exit/trapdoor.
       move(steer(room, player, room:GetCenterPos(), false))
     end
     if tick % 60 == 0 then orbit = -orbit end
@@ -270,6 +313,17 @@ mod:AddCallback(ModCallbacks.MC_INPUT_ACTION, function(_, entity, hook, action)
   if hook == InputHook.IS_ACTION_PRESSED or hook == InputHook.IS_ACTION_TRIGGERED then return held[action] == true end
   if hook == InputHook.GET_ACTION_VALUE then return held[action] and 1 or 0 end
 end)
+mod:AddCallback(ModCallbacks.MC_ENTITY_TAKE_DMG, function(_, entity, amount)
+  if entity.Type ~= EntityType.ENTITY_PLAYER then return nil end
+  local player = entity:ToPlayer()
+  if not player or player:GetPlayerType() ~= 7 then return nil end
+  if not firstBlockedDamage then
+    firstBlockedDamage = true
+    blockedHealth = player:GetHearts() + player:GetSoulHearts()
+    Isaac.DebugString("LUNA_INVULNERABLE_FIRST_BLOCKED:" .. tostring(amount) .. ":" .. tostring(blockedHealth))
+  end
+  return false
+end, EntityType.ENTITY_PLAYER)
 mod:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, function() logState() end)
 mod:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, function() logState() end)
 `;

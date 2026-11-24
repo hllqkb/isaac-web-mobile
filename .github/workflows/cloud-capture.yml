@@ -10,6 +10,7 @@ on:
           - '1'
           - '2'
           - '3'
+          - '4'
 permissions:
   contents: read
 jobs:
